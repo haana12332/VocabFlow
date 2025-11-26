@@ -72,9 +72,9 @@ export const generateWordInfo = async (englishWord: string): Promise<Partial<Wor
   - english: string (the word itself)
   - meaning: string (Japanese meaning)
   - coreImage: string (Brief explanation of the core image/etymology in Japanese)
-  - category: string (e.g., Business, Daily, Academic, Travel, Science)
-  - partOfSpeech: array of strings (Must be in English, e.g., Noun, Verb, Adjective). IMPORTANT: If the input contains spaces (e.g. "pick up", "sort out"), STRICTLY classify it as "Idiom".
-  - toeicLevel: number (Estimated TOEIC score level required for this word, e.g., 400, 600, 730, 860, 990)
+  - category: string ( Category when use this word must be strictly one of the following: Business, Daily, Health, Technology, Shopping, Finance, Restaurants, Emotions, Relationships, Nature, Transportation, Academic, Travel, Science, Other.)
+  - partOfSpeech: array of strings (Must be in English, e.g., Noun, Verb, Adjective, Prepositions, Adverbs, Conjunctions, others). IMPORTANT: If the input contains spaces (e.g. "pick up", "sort out"), STRICTLY classify it as "Idiom".
+  - toeicLevel: number (Estimated TOEIC score level required for this word, Must be in 400, 600, 730, 860, 990)
   - examples: array of objects with 'sentence' (English) and 'translation' (Japanese)
   `;
 
@@ -116,11 +116,11 @@ export const generateBulkWordInfo = async (inputString: string): Promise<Partial
     Return a JSON Array of objects.
     Fields required for each object:
     - english: string
-    - meaning: string (Japanese)
-    - coreImage: string (Japanese)
-    - category: string
+    - meaning: string (Japanese) 
+    - coreImage: string (Japanese) (Brief explanation of the core image/etymology in Japanese)
+    - category: string  Category when use this word must be strictly one of the following: Business, Daily, Health, Technology, Shopping, Finance, Restaurants, Emotions, Relationships, Nature, Transportation, Academic, Travel, Science, Other.)
     - partOfSpeech: array of strings (English). Set to 'Idiom' if it is a phrase.
-    - toeicLevel: number
+    - toeicLevel: number (Estimated TOEIC score level required for this word, Must be in 400, 600, 730, 860, 990)
     - examples: array of objects {sentence, translation}
     `;
 

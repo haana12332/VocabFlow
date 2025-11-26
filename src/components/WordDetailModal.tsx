@@ -75,6 +75,16 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
                              <option value="Daily">Daily</option>
                              <option value="Business">Business</option>
                              <option value="Academic">Academic</option>
+                             <option value="Academic">Technology</option>
+                             <option value="Academic">Shopping</option>
+                             <option value="Academic">Finance</option>
+                             <option value="Academic">Restaurant</option>
+                             <option value="Academic">Emotions</option>
+                             <option value="Academic">Relationships</option>
+                             <option value="Academic">Nature</option>
+                             <option value="Academic">Transportation</option>
+                             <option value="Academic">Science</option>
+                             <option value="Academic">other</option>
                          </select>
                      </div>
                  ) : (
