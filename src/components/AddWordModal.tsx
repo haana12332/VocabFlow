@@ -1,0 +1,321 @@
+import React, { useState, useEffect } from 'react';
+import { WordDocument } from '../types';
+import { generateWordInfo, generateBulkWordInfo } from '../services/geminiService';
+import { addWordToFirestore } from '../firebase';
+
+interface AddWordModalProps {
+  onClose: () => void;
+  onSuccess: () => void;
+}
+
+export const AddWordModal: React.FC<AddWordModalProps> = ({ onClose, onSuccess }) => {
+  const [mode, setMode] = useState<'manual' | 'ai' | 'bulk'>('ai');
+  const [loading, setLoading] = useState(false);
+  
+  // AI Single
+  const [inputWord, setInputWord] = useState('');
+
+  // AI Bulk
+  const [bulkInput, setBulkInput] = useState('');
+  const [progress, setProgress] = useState(0);
+
+  // Manual Form State
+  const [manualData, setManualData] = useState<Partial<WordDocument> & { exampleSentence: string, exampleTranslation: string }>({
+    english: '',
+    meaning: '',
+    category: 'Daily',
+    toeicLevel: 600,
+    partOfSpeech: [],
+    coreImage: '',
+    exampleSentence: '',
+    exampleTranslation: ''
+  });
+
+  // Auto-detect Idiom for Manual Entry
+  useEffect(() => {
+    if (manualData.english && manualData.english.trim().includes(' ')) {
+        // If it has spaces and POS is empty or doesn't have Idiom, suggest/set it
+        if (Array.isArray(manualData.partOfSpeech) && !manualData.partOfSpeech.includes('Idiom')) {
+             setManualData(prev => ({ ...prev, partOfSpeech: ['Idiom'] }));
+        }
+    }
+  }, [manualData.english]);
+
+  const handleAiSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputWord.trim()) return;
+
+    setLoading(true);
+    try {
+      const generatedData = await generateWordInfo(inputWord);
+      await addWordToFirestore(generatedData as WordDocument);
+      onSuccess();
+      onClose();
+    } catch (error) {
+      alert("Error generating or saving word. Please try again.");
+      console.error(error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleBulkSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!bulkInput.trim()) return;
+
+    setLoading(true);
+    setProgress(10);
+    try {
+        const words = await generateBulkWordInfo(bulkInput);
+        setProgress(50);
+        
+        let completed = 0;
+        await Promise.all(words.map(async (word) => {
+            await addWordToFirestore(word as WordDocument);
+            completed++;
+            setProgress(50 + (completed / words.length) * 50);
+        }));
+
+        onSuccess();
+        onClose();
+    } catch (error) {
+        alert("Error processing bulk words. Please try again with fewer words.");
+        console.error(error);
+    } finally {
+        setLoading(false);
+        setProgress(0);
+    }
+  };
+
+  const handleManualSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const examples = [];
+      if (manualData.exampleSentence && manualData.exampleTranslation) {
+          examples.push({
+              sentence: manualData.exampleSentence,
+              translation: manualData.exampleTranslation
+          });
+      }
+
+      // Check for idiom one last time
+      let pos = typeof manualData.partOfSpeech === 'string' ? [manualData.partOfSpeech] : manualData.partOfSpeech || [];
+      if (manualData.english?.trim().includes(' ') && !pos.includes('Idiom')) {
+          pos = ['Idiom'];
+      }
+
+      const wordToSave: any = {
+          english: manualData.english,
+          meaning: manualData.meaning,
+          category: manualData.category,
+          toeicLevel: Number(manualData.toeicLevel) || 600,
+          coreImage: manualData.coreImage || '',
+          status: 'Beginner',
+          createdAt: new Date(),
+          pronunciationURL: `https://www.google.com/search?q=${manualData.english}+pronunciation`,
+          partOfSpeech: pos,
+          examples: examples
+      };
+      
+      await addWordToFirestore(wordToSave);
+      onSuccess();
+      onClose();
+    } catch (error) {
+      console.error(error);
+      alert("Failed to save word.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="neumorph-flat w-full max-w-lg rounded-2xl p-6 relative max-h-[90vh] overflow-y-auto">
+        <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600">
+            <i className="fa-solid fa-times text-xl"></i>
+        </button>
+
+        <h2 className="text-2xl font-bold text-slate-800 mb-6">Add New Words</h2>
+
+        {/* Mode Toggle */}
+        <div className="flex bg-slate-200 p-1 rounded-xl mb-6 sticky top-0 z-10">
+            <button 
+                onClick={() => setMode('ai')}
+                className={`flex-1 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all ${mode === 'ai' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500'}`}
+            >
+                AI Single
+            </button>
+            <button 
+                onClick={() => setMode('bulk')}
+                className={`flex-1 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all ${mode === 'bulk' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500'}`}
+            >
+                AI Bulk
+            </button>
+            <button 
+                onClick={() => setMode('manual')}
+                className={`flex-1 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all ${mode === 'manual' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500'}`}
+            >
+                Manual
+            </button>
+        </div>
+
+        {mode === 'ai' && (
+            <form onSubmit={handleAiSubmit} className="space-y-4">
+                <div>
+                    <label className="block text-sm font-bold text-slate-600 mb-2">English Word or Phrase</label>
+                    <input 
+                        type="text" 
+                        value={inputWord}
+                        onChange={(e) => setInputWord(e.target.value)}
+                        className="w-full neumorph-pressed rounded-xl p-4 text-lg outline-none text-slate-700 bg-transparent focus:ring-2 focus:ring-indigo-200"
+                        placeholder="e.g. Serendipity"
+                        autoFocus
+                    />
+                </div>
+                <button 
+                    type="submit" 
+                    disabled={loading}
+                    className="w-full neumorph-btn py-4 rounded-xl text-indigo-600 font-bold flex items-center justify-center gap-2 hover:scale-[1.01]"
+                >
+                    {loading ? <i className="fa-solid fa-circle-notch fa-spin"></i> : <><i className="fa-solid fa-wand-magic-sparkles"></i> Generate</>}
+                </button>
+            </form>
+        )}
+
+        {mode === 'bulk' && (
+             <form onSubmit={handleBulkSubmit} className="space-y-4">
+                <div>
+                    <label className="block text-sm font-bold text-slate-600 mb-2">Bulk Words (comma separated)</label>
+                    <textarea 
+                        rows={4}
+                        value={bulkInput}
+                        onChange={(e) => setBulkInput(e.target.value)}
+                        className="w-full neumorph-pressed rounded-xl p-4 text-base outline-none text-slate-700 bg-transparent focus:ring-2 focus:ring-indigo-200"
+                        placeholder="Apple, Banana, Beach, Take off"
+                        autoFocus
+                    />
+                    <p className="text-xs text-slate-400 mt-2 text-right">Separate words with commas.</p>
+                </div>
+                
+                {loading && (
+                    <div className="w-full bg-slate-200 rounded-full h-2 mb-4">
+                        <div className="bg-indigo-600 h-2 rounded-full transition-all duration-300" style={{ width: `${progress}%` }}></div>
+                    </div>
+                )}
+
+                <button 
+                    type="submit" 
+                    disabled={loading}
+                    className="w-full neumorph-btn py-4 rounded-xl text-indigo-600 font-bold flex items-center justify-center gap-2 hover:scale-[1.01]"
+                >
+                    {loading ? <i className="fa-solid fa-circle-notch fa-spin"></i> : <><i className="fa-solid fa-layer-group"></i> Bulk Generate</>}
+                </button>
+            </form>
+        )}
+
+        {mode === 'manual' && (
+            <form onSubmit={handleManualSubmit} className="space-y-4">
+                 <div className="grid grid-cols-2 gap-4">
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-1">English</label>
+                        <input 
+                            required
+                            type="text" 
+                            value={manualData.english}
+                            onChange={(e) => setManualData({...manualData, english: e.target.value})}
+                            className="w-full neumorph-pressed rounded-xl p-3 outline-none text-slate-700 bg-transparent"
+                            placeholder="e.g. apple"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-1">Japanese Meaning</label>
+                        <input 
+                            required
+                            type="text" 
+                            value={manualData.meaning}
+                            onChange={(e) => setManualData({...manualData, meaning: e.target.value})}
+                            className="w-full neumorph-pressed rounded-xl p-3 outline-none text-slate-700 bg-transparent"
+                        />
+                    </div>
+                 </div>
+
+                 <div className="grid grid-cols-2 gap-4">
+                    <div>
+                         <label className="block text-xs font-bold text-slate-500 mb-1">Category</label>
+                         <select 
+                            value={manualData.category}
+                            onChange={(e) => setManualData({...manualData, category: e.target.value})}
+                            className="w-full neumorph-pressed rounded-xl p-3 outline-none text-slate-700 bg-transparent"
+                         >
+                             <option value="Daily">Daily</option>
+                             <option value="Business">Business</option>
+                             <option value="Academic">Academic</option>
+                             <option value="Travel">Travel</option>
+                             <option value="Technical">Technical</option>
+                         </select>
+                    </div>
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-1">TOEIC Level</label>
+                        <input 
+                            type="number" 
+                            placeholder="e.g. 600"
+                            value={manualData.toeicLevel}
+                            onChange={(e) => setManualData({...manualData, toeicLevel: Number(e.target.value)})}
+                            className="w-full neumorph-pressed rounded-xl p-3 outline-none text-slate-700 bg-transparent"
+                        />
+                    </div>
+                 </div>
+
+                 <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">Part of Speech (English)</label>
+                    <input 
+                        type="text" 
+                        placeholder="Noun, Verb"
+                        value={Array.isArray(manualData.partOfSpeech) ? manualData.partOfSpeech.join(', ') : manualData.partOfSpeech}
+                        onChange={(e) => setManualData({...manualData, partOfSpeech: e.target.value.split(',').map(s => s.trim())})}
+                        className="w-full neumorph-pressed rounded-xl p-3 outline-none text-slate-700 bg-transparent"
+                    />
+                 </div>
+
+                 <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">Core Image</label>
+                    <textarea 
+                        rows={2}
+                        value={manualData.coreImage}
+                        onChange={(e) => setManualData({...manualData, coreImage: e.target.value})}
+                        className="w-full neumorph-pressed rounded-xl p-3 outline-none text-slate-700 bg-transparent text-sm"
+                    />
+                 </div>
+
+                 <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                    <label className="block text-xs font-bold text-indigo-500 mb-2 uppercase">Example Sentence</label>
+                    <input 
+                        type="text" 
+                        placeholder="English Sentence"
+                        value={manualData.exampleSentence}
+                        onChange={(e) => setManualData({...manualData, exampleSentence: e.target.value})}
+                        className="w-full neumorph-pressed rounded-lg p-2 text-sm outline-none text-slate-700 bg-transparent mb-2"
+                    />
+                    <input 
+                        type="text" 
+                        placeholder="Japanese Translation"
+                        value={manualData.exampleTranslation}
+                        onChange={(e) => setManualData({...manualData, exampleTranslation: e.target.value})}
+                        className="w-full neumorph-pressed rounded-lg p-2 text-sm outline-none text-slate-700 bg-transparent"
+                    />
+                 </div>
+
+                <button 
+                    type="submit" 
+                    disabled={loading}
+                    className="w-full neumorph-btn py-4 rounded-xl text-indigo-600 font-bold hover:scale-[1.01]"
+                >
+                    {loading ? "Saving..." : "Save Word"}
+                </button>
+            </form>
+        )}
+      </div>
+    </div>
+  );
+};

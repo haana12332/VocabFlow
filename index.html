@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VocabFlow - AI Vocabulary Builder</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet" />
+    <style>
+      /* Neumorphism Utilities */
+      .neumorph-flat {
+        background: #f0f4f8;
+        box-shadow: 6px 6px 12px #c9ced4, -6px -6px 12px #ffffff;
+      }
+      .neumorph-pressed {
+        background: #f0f4f8;
+        box-shadow: inset 6px 6px 12px #c9ced4, inset -6px -6px 12px #ffffff;
+      }
+      .neumorph-btn {
+        background: #f0f4f8;
+        box-shadow: 5px 5px 10px #c9ced4, -5px -5px 10px #ffffff;
+        transition: all 0.2s ease-in-out;
+      }
+      .neumorph-btn:active {
+        box-shadow: inset 5px 5px 10px #c9ced4, inset -5px -5px 10px #ffffff;
+      }
+      body {
+        background-color: #f0f4f8;
+        color: #334155;
+      }
+      /* Hide scrollbar for clean horizontal scrolling */
+      .no-scrollbar::-webkit-scrollbar {
+        display: none;
+      }
+      .no-scrollbar {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "firebase/": "https://aistudiocdn.com/firebase@^12.6.0/"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body>
+    <div id="root"></div>
+  <script type="module" src="src/index.tsx"></script>
+</body>
+</html>
