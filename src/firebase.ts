@@ -52,6 +52,11 @@ export const updateWord = async (id: string, data: Partial<WordDocument>) => {
     await updateDoc(wordRef, data);
 };
 
+export const updateWordExmaple = async (id: string, examples: WordDocument['examples']) => {
+    const wordRef = doc(db, WORDS_COLLECTION, id);
+    await updateDoc(wordRef, {examples});
+};
+
 export const updateWordStatus = async (id: string, status: WordDocument['status']) => {
     const wordRef = doc(db, WORDS_COLLECTION, id);
     await updateDoc(wordRef, { status });

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { WordDocument } from '../types';
 import { updateWord } from '../firebase';
 
@@ -6,19 +6,35 @@ interface WordDetailModalProps {
   word: WordDocument;
   onClose: () => void;
   onDelete: (id: string) => void;
-  onUpdate: () => void; // Callback to refresh parent
+  onUpdate: () => void;
 }
 
 export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose, onDelete, onUpdate }) => {
+  // ★修正1: 表示用のデータをローカルステートで管理する
+  const [currentWord, setCurrentWord] = useState<WordDocument>(word);
+  
   const [isEditing, setIsEditing] = useState(false);
-  const [editData, setEditData] = useState<WordDocument>({ ...word });
+  const [editData, setEditData] = useState<WordDocument>({ 
+    ...word, 
+    examples: word.examples || [] 
+  });
   const [loading, setLoading] = useState(false);
+
+  // ★修正2: 親から渡されるwordが変わった場合（別の単語をクリックした時など）にステートを同期する
+  useEffect(() => {
+    setCurrentWord(word);
+    setEditData({ ...word, examples: word.examples || [] });
+  }, [word]);
 
   const handleSave = async () => {
     setLoading(true);
     try {
-        await updateWord(word.id, editData);
-        onUpdate();
+        await updateWord(currentWord.id, editData);
+        
+        // ★修正3: 保存成功時、即座に表示用ステートを更新してUIに反映させる
+        setCurrentWord(editData);
+        
+        onUpdate(); // 親（一覧画面）のデータもバックグラウンドで更新
         setIsEditing(false);
     } catch (e) {
         console.error("Failed to update", e);
@@ -31,6 +47,30 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
   const handleChange = (field: keyof WordDocument, value: any) => {
     setEditData(prev => ({ ...prev, [field]: value }));
   };
+
+  const handleExampleChange = (index: number, field: 'sentence' | 'translation', value: string) => {
+    const newExamples = [...(editData.examples || [])];
+    newExamples[index] = {
+        ...newExamples[index],
+        [field]: value
+    };
+    setEditData(prev => ({ ...prev, examples: newExamples }));
+  };
+
+  const handleAddExample = () => {
+    setEditData(prev => ({
+        ...prev,
+        examples: [...(prev.examples || []), { sentence: '', translation: '' }]
+    }));
+  };
+
+  const handleRemoveExample = (index: number) => {
+    const newExamples = [...(editData.examples || [])];
+    newExamples.splice(index, 1);
+    setEditData(prev => ({ ...prev, examples: newExamples }));
+  };
+
+  // 以下のレンダリング部分では、基本的に `word` ではなく `currentWord` を使用します
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/30 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
@@ -75,21 +115,21 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
                              <option value="Daily">Daily</option>
                              <option value="Business">Business</option>
                              <option value="Academic">Academic</option>
-                             <option value="Academic">Technology</option>
-                             <option value="Academic">Shopping</option>
-                             <option value="Academic">Finance</option>
-                             <option value="Academic">Restaurant</option>
-                             <option value="Academic">Emotions</option>
-                             <option value="Academic">Relationships</option>
-                             <option value="Academic">Nature</option>
-                             <option value="Academic">Transportation</option>
-                             <option value="Academic">Science</option>
-                             <option value="Academic">other</option>
+                             <option value="Technology">Technology</option>
+                             <option value="Shopping">Shopping</option>
+                             <option value="Finance">Finance</option>
+                             <option value="Restaurant">Restaurant</option>
+                             <option value="Emotions">Emotions</option>
+                             <option value="Relationships">Relationships</option>
+                             <option value="Nature">Nature</option>
+                             <option value="Transportation">Transportation</option>
+                             <option value="Science">Science</option>
+                             <option value="Other">Other</option>
                          </select>
                      </div>
                  ) : (
                      <span className="text-xs font-bold text-indigo-500 bg-indigo-50 px-3 py-1 rounded-full uppercase tracking-wider">
-                        {word.category}
+                        {currentWord.category}
                      </span>
                  )}
                  {isEditing ? (
@@ -104,7 +144,7 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
                      </div>
                  ) : (
                      <span className="text-xs font-bold text-slate-500 bg-slate-100 px-3 py-1 rounded-full uppercase tracking-wider">
-                        TOEIC {word.toeicLevel || 'N/A'}
+                        TOEIC {currentWord.toeicLevel || 'N/A'}
                      </span>
                  )}
             </div>
@@ -117,7 +157,7 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
                     className="text-3xl font-black text-slate-800 text-center border-b-2 border-indigo-200 outline-none w-full"
                 />
             ) : (
-                <h2 className="text-4xl font-black text-slate-800 text-center">{word.english}</h2>
+                <h2 className="text-4xl font-black text-slate-800 text-center">{currentWord.english}</h2>
             )}
 
             <div className="flex gap-2 mt-2 items-center">
@@ -130,14 +170,14 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
                         placeholder="Noun, Verb"
                     />
                  ) : (
-                    word.partOfSpeech.map((pos, i) => (
+                    currentWord.partOfSpeech.map((pos, i) => (
                         <span key={i} className="text-slate-400 text-sm font-semibold italic">{pos}</span>
                     ))
                  )}
             </div>
 
             <button 
-                onClick={() => window.open(word.pronunciationURL, '_blank')}
+                onClick={() => window.open(currentWord.pronunciationURL, '_blank')}
                 className="mt-4 neumorph-btn w-10 h-10 rounded-full flex items-center justify-center text-indigo-600"
             >
                 <i className="fa-solid fa-volume-high"></i>
@@ -147,20 +187,14 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
         {/* Status Section (Read Only) */}
         <div className="flex justify-center mb-6">
              <div className="bg-slate-100 rounded-lg p-1 flex">
-                <div 
-                    className={`px-3 py-1 rounded text-xs font-bold ${word.status === 'Beginner' ? 'bg-white shadow text-indigo-600' : 'text-slate-400 opacity-50'}`}
-                >
+                <div className={`px-3 py-1 rounded text-xs font-bold ${currentWord.status === 'Beginner' ? 'bg-white shadow text-indigo-600' : 'text-slate-400 opacity-50'}`}>
                     Beginner
                 </div>
-                <div 
-                    className={`px-3 py-1 rounded text-xs font-bold ${word.status === 'Training' ? 'bg-white shadow text-blue-600' : 'text-slate-400 opacity-50'}`}
-                >
+                <div className={`px-3 py-1 rounded text-xs font-bold ${currentWord.status === 'Training' ? 'bg-white shadow text-blue-600' : 'text-slate-400 opacity-50'}`}>
                     Training
                 </div>
-                <div 
-                    className={`px-3 py-1 rounded text-xs font-bold flex items-center gap-1 ${word.status === 'Mastered' ? 'bg-green-100 text-green-700' : 'text-slate-300 opacity-50'}`}
-                >
-                    {word.status === 'Mastered' && <i className="fa-solid fa-check"></i>} Mastered
+                <div className={`px-3 py-1 rounded text-xs font-bold flex items-center gap-1 ${currentWord.status === 'Mastered' ? 'bg-green-100 text-green-700' : 'text-slate-300 opacity-50'}`}>
+                    {currentWord.status === 'Mastered' && <i className="fa-solid fa-check"></i>} Mastered
                 </div>
              </div>
         </div>
@@ -180,7 +214,7 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
                         onChange={(e) => handleChange('meaning', e.target.value)}
                     />
                 ) : (
-                    <p className="text-2xl font-bold text-slate-700">{word.meaning}</p>
+                    <p className="text-2xl font-bold text-slate-700">{currentWord.meaning}</p>
                 )}
             </div>
 
@@ -194,46 +228,69 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
                         onChange={(e) => handleChange('coreImage', e.target.value)}
                     />
                 ) : (
-                    <p className="text-slate-600 leading-relaxed">{word.coreImage}</p>
+                    <p className="text-slate-600 leading-relaxed">{currentWord.coreImage}</p>
                 )}
             </div>
 
-            {(word.examples && word.examples.length > 0) || isEditing ? (
+            {/* Examples Section */}
+            {(currentWord.examples && currentWord.examples.length > 0) || isEditing ? (
                 <div>
-                     <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3 px-2">Examples</h3>
+                     <div className="flex justify-between items-center mb-3 px-2">
+                        <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Examples</h3>
+                        {isEditing && (
+                            <button 
+                                onClick={handleAddExample}
+                                className="text-xs bg-indigo-100 text-indigo-600 px-2 py-1 rounded hover:bg-indigo-200 font-bold"
+                            >
+                                <i className="fa-solid fa-plus mr-1"></i> Add
+                            </button>
+                        )}
+                     </div>
+                     
                      <div className="space-y-3">
                         {isEditing ? (
-                            <div className="border border-indigo-200 rounded p-2 bg-white">
-                                <input 
-                                    className="w-full border-b border-slate-100 mb-1 outline-none text-sm" 
-                                    placeholder="English Sentence"
-                                    value={editData.examples?.[0]?.sentence || ''}
-                                    onChange={(e) => {
-                                        const newEx = [...(editData.examples || [])];
-                                        if(!newEx[0]) newEx[0] = { sentence: '', translation: '' };
-                                        newEx[0].sentence = e.target.value;
-                                        handleChange('examples', newEx);
-                                    }}
-                                />
-                                <input 
-                                    className="w-full outline-none text-xs text-slate-500" 
-                                    placeholder="Japanese Translation"
-                                    value={editData.examples?.[0]?.translation || ''}
-                                    onChange={(e) => {
-                                        const newEx = [...(editData.examples || [])];
-                                        if(!newEx[0]) newEx[0] = { sentence: '', translation: '' };
-                                        newEx[0].translation = e.target.value;
-                                        handleChange('examples', newEx);
-                                    }}
-                                />
-                            </div>
+                            (editData.examples || []).map((ex, index) => (
+                                <div key={index} className="border border-indigo-200 rounded p-3 bg-white relative group">
+                                    <button 
+                                        onClick={() => handleRemoveExample(index)}
+                                        className="absolute top-2 right-2 text-slate-300 hover:text-red-400"
+                                        title="Remove example"
+                                    >
+                                        <i className="fa-solid fa-times-circle"></i>
+                                    </button>
+                                    
+                                    <div className="mb-2">
+                                        <label className="text-[10px] text-slate-400 font-bold uppercase">Sentence</label>
+                                        <input 
+                                            className="w-full border-b border-slate-100 outline-none text-sm text-slate-800" 
+                                            placeholder="English Sentence"
+                                            value={ex.sentence}
+                                            onChange={(e) => handleExampleChange(index, 'sentence', e.target.value)}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="text-[10px] text-slate-400 font-bold uppercase">Translation</label>
+                                        <input 
+                                            className="w-full outline-none text-xs text-slate-500" 
+                                            placeholder="Japanese Translation"
+                                            value={ex.translation}
+                                            onChange={(e) => handleExampleChange(index, 'translation', e.target.value)}
+                                        />
+                                    </div>
+                                </div>
+                            ))
                         ) : (
-                            word.examples.map((ex, i) => (
+                            currentWord.examples && currentWord.examples.map((ex, i) => (
                                 <div key={i} className="border-l-4 border-indigo-200 pl-4 py-1">
                                     <p className="text-slate-800 font-medium mb-1">{ex.sentence}</p>
                                     <p className="text-slate-500 text-sm">{ex.translation}</p>
                                 </div>
                             ))
+                        )}
+                        {isEditing && (!editData.examples || editData.examples.length === 0) && (
+                            <p className="text-center text-slate-400 text-xs py-4 border border-dashed border-slate-300 rounded">
+                                No examples yet. Click "Add" to create one.
+                            </p>
                         )}
                      </div>
                 </div>
@@ -241,11 +298,11 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
         </div>
 
         <div className="mt-8 pt-6 border-t border-slate-100 flex justify-between">
-            <span className="text-xs text-slate-400">Added on {new Date(word.createdAt.seconds * 1000).toLocaleDateString()}</span>
+            <span className="text-xs text-slate-400">Added on {currentWord.createdAt?.seconds ? new Date(currentWord.createdAt.seconds * 1000).toLocaleDateString() : 'N/A'}</span>
             <button 
                 onClick={() => {
                     if(window.confirm('Are you sure you want to delete this word?')) {
-                        onDelete(word.id);
+                        onDelete(currentWord.id);
                         onClose();
                     }
                 }}
