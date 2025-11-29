@@ -34,6 +34,7 @@ export interface WordDocument {
     status: WordStatus;
     pronunciationURL: string;
     createdAt: any; // Firestore Timestamp
+    comment:string;
 }
 
 export enum QuizMode {

@@ -38,7 +38,8 @@ export const addWordToFirestore = async (wordData: Omit<WordDocument, 'id' | 'cr
   try {
     const docRef = await addDoc(collection(db, WORDS_COLLECTION), {
       ...wordData,
-      createdAt: Timestamp.now()
+      createdAt: Timestamp.now(),
+      comment :''
     });
     return docRef.id;
   } catch (e) {
@@ -52,9 +53,13 @@ export const updateWord = async (id: string, data: Partial<WordDocument>) => {
     await updateDoc(wordRef, data);
 };
 
-export const updateWordExmaple = async (id: string, examples: WordDocument['examples']) => {
+export const updateWordExample = async (id: string, examples: WordDocument['examples']) => {
     const wordRef = doc(db, WORDS_COLLECTION, id);
     await updateDoc(wordRef, {examples});
+};
+export const updateWordComment = async (id: string, comment: WordDocument['comment']) => {
+  const wordRef = doc(db, WORDS_COLLECTION, id);
+  await updateDoc(wordRef, {comment});
 };
 
 export const updateWordStatus = async (id: string, status: WordDocument['status']) => {

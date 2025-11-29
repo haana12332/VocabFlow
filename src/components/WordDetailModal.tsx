@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { WordDocument } from '../types';
-import { updateWord } from '../firebase';
+import { updateWord, updateWordExample, updateWordComment } from '../firebase';
 
 interface WordDetailModalProps {
   word: WordDocument;
@@ -16,20 +16,32 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState<WordDocument>({ 
     ...word, 
-    examples: word.examples || [] 
+    examples: word.examples || [],
+    comment: word.comment || ''
   });
   const [loading, setLoading] = useState(false);
 
   // ★修正2: 親から渡されるwordが変わった場合（別の単語をクリックした時など）にステートを同期する
   useEffect(() => {
     setCurrentWord(word);
-    setEditData({ ...word, examples: word.examples || [] });
+    setEditData({ 
+      ...word, 
+      examples: word.examples || [],
+      comment: word.comment || ''
+    });
   }, [word]);
 
   const handleSave = async () => {
     setLoading(true);
     try {
+        // 基本情報の更新
         await updateWord(currentWord.id, editData);
+        
+        // Examplesの更新
+        await updateWordExample(currentWord.id, editData.examples);
+        
+        // Commentの更新
+        await updateWordComment(currentWord.id, editData.comment);
         
         // ★修正3: 保存成功時、即座に表示用ステートを更新してUIに反映させる
         setCurrentWord(editData);
@@ -85,7 +97,7 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
                 <button 
                     onClick={handleSave} 
                     disabled={loading}
-                    className="text-indigo-600 font-bold text-sm px-4 py-2 bg-indigo-50 rounded-lg hover:bg-indigo-100"
+                    className="text-indigo-600 font-bold text-sm px-4 py-2 bg-indigo-50 rounded-lg hover:bg-indigo-100 disabled:opacity-50"
                 >
                     {loading ? "Saving..." : "Save Changes"}
                 </button>
@@ -295,6 +307,26 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
                      </div>
                 </div>
             ) : null}
+
+            {/* Comment Section */}
+            <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
+                <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-2">
+                    <i className="fa-solid fa-comment mr-2"></i>Comment / Notes
+                </h3>
+                {isEditing ? (
+                    <textarea 
+                        className="w-full bg-transparent border border-indigo-200 outline-none text-slate-600 rounded p-2"
+                        rows={4}
+                        value={editData.comment || ''}
+                        onChange={(e) => handleChange('comment', e.target.value)}
+                        placeholder="Add your personal notes, tips, or reminders here..."
+                    />
+                ) : (
+                    <p className="text-slate-600 leading-relaxed">
+                        {currentWord.comment || <span className="text-slate-400 italic">No comments yet</span>}
+                    </p>
+                )}
+            </div>
         </div>
 
         <div className="mt-8 pt-6 border-t border-slate-100 flex justify-between">
