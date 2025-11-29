@@ -31,3 +31,4 @@ dist-ssr
 .firebase-debug.log
 firebase-debug.log
 .env
+metadata.json 

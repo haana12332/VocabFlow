@@ -43,6 +43,8 @@ export const QuizModal: React.FC<QuizModalProps> = ({ words, onClose, onUpdate }
     // Standard Quiz State
     const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
     const [showAnswer, setShowAnswer] = useState(false);
+    const [userAnswers, setUserAnswers] = useState<{ [key: number]: string }>({}); // ユーザーの回答を保存
+    const [upgradingStatus, setUpgradingStatus] = useState<{ [key: string]: boolean }>({}); // アップグレード中の状態
 
     // Helpers for Select Options
     const categories = Array.from(new Set(words.map(w => w.category)));
@@ -185,12 +187,71 @@ export const QuizModal: React.FC<QuizModalProps> = ({ words, onClose, onUpdate }
         }
     };
 
+    const handleStatusUpgrade = async (wordId: string) => {
+        setUpgradingStatus(prev => ({ ...prev, [wordId]: true }));
+        try {
+            await updateWordStatus(wordId, 'Training');
+            // ローカル状態も更新
+            setFilteredWords(prev => prev.map(w => w.id === wordId ? { ...w, status: 'Training' } : w));
+            if (onUpdate) {
+                onUpdate();
+            }
+            setToastMsg("Success! Word status updated to Training.");
+            setTimeout(() => setToastMsg(null), 3000);
+        } catch (e) {
+            console.error("Update failed", e);
+            alert("Failed to update status. Please try again.");
+        } finally {
+            setUpgradingStatus(prev => ({ ...prev, [wordId]: false }));
+        }
+    };
+
+    const handleStatusDowngrade = async (wordId: string) => {
+        setUpgradingStatus(prev => ({ ...prev, [wordId]: true }));
+        try {
+            await updateWordStatus(wordId, 'Beginner');
+            // ローカル状態も更新
+            setFilteredWords(prev => prev.map(w => w.id === wordId ? { ...w, status: 'Beginner' } : w));
+            if (onUpdate) {
+                onUpdate();
+            }
+            setToastMsg("Word status updated to Beginner.");
+            setTimeout(() => setToastMsg(null), 3000);
+        } catch (e) {
+            console.error("Update failed", e);
+            alert("Failed to update status. Please try again.");
+        } finally {
+            setUpgradingStatus(prev => ({ ...prev, [wordId]: false }));
+        }
+    };
+
+    const handleMasteredDowngrade = async (wordId: string) => {
+        setUpgradingStatus(prev => ({ ...prev, [wordId]: true }));
+        try {
+            await updateWordStatus(wordId, 'Training');
+            // ローカル状態も更新
+            setFilteredWords(prev => prev.map(w => w.id === wordId ? { ...w, status: 'Training' } : w));
+            if (onUpdate) {
+                onUpdate();
+            }
+            setToastMsg("Word status updated to Training.");
+            setTimeout(() => setToastMsg(null), 3000);
+        } catch (e) {
+            console.error("Update failed", e);
+            alert("Failed to update status. Please try again.");
+        } finally {
+            setUpgradingStatus(prev => ({ ...prev, [wordId]: false }));
+        }
+    };
+
     // Configuration Screen
     if (mode === QuizMode.CONFIG) {
         return (
             <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
                 <div className="neumorph-flat w-full max-w-lg rounded-2xl p-8 relative">
-                    <button onClick={onClose} className="absolute top-4 right-4 text-slate-400"><i className="fa-solid fa-times"></i></button>
+                    <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors">
+                        <i className="fa-solid fa-times"></i>
+                    </button>
                     <h2 className="text-2xl font-black text-slate-800 mb-6 text-center">Quiz Setup</h2>
                     
                     <div className="space-y-4">
@@ -266,13 +327,13 @@ export const QuizModal: React.FC<QuizModalProps> = ({ words, onClose, onUpdate }
                     <div className="mt-8 grid grid-cols-2 gap-4">
                         <button 
                             onClick={() => startQuiz(QuizMode.STANDARD)}
-                            className="neumorph-btn py-3 rounded-xl text-indigo-600 font-bold flex flex-col items-center justify-center hover:bg-indigo-50"
+                            className="neumorph-btn py-3 rounded-xl text-indigo-600 font-bold flex flex-col items-center justify-center hover:bg-indigo-50 transition-colors"
                         >
                              <i className="fa-solid fa-layer-group mb-1"></i> Standard Quiz
                         </button>
                         <button 
                             onClick={() => startQuiz(QuizMode.AI_CHAT)}
-                            className="neumorph-btn py-3 rounded-xl text-purple-600 font-bold flex flex-col items-center justify-center hover:bg-purple-50"
+                            className="neumorph-btn py-3 rounded-xl text-purple-600 font-bold flex flex-col items-center justify-center hover:bg-purple-50 transition-colors"
                         >
                              <i className="fa-solid fa-robot mb-1"></i> AI Quiz
                         </button>
@@ -285,58 +346,171 @@ export const QuizModal: React.FC<QuizModalProps> = ({ words, onClose, onUpdate }
     // Standard Quiz Mode
     if (mode === QuizMode.STANDARD) {
         const currentWord = filteredWords[currentQuestionIndex];
+        const currentAnswer = userAnswers[currentQuestionIndex] || '';
+        const isCorrect = currentAnswer.trim().toLowerCase() === currentWord.meaning.toLowerCase();
+        
         return (
             <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
-                <div className="neumorph-flat w-full max-w-lg rounded-2xl p-8 relative min-h-[400px] flex flex-col">
-                    <button onClick={onClose} className="absolute top-4 right-4 text-slate-400"><i className="fa-solid fa-times"></i></button>
+                <div className="neumorph-flat w-full max-w-lg rounded-2xl p-8 relative min-h-[500px] flex flex-col">
+                    <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors">
+                        <i className="fa-solid fa-times"></i>
+                    </button>
                     
-                    <div className="flex-1 flex flex-col items-center justify-center text-center">
-                        <span className="text-sm font-bold text-slate-400 mb-2">Question {currentQuestionIndex + 1} / {filteredWords.length}</span>
+                    <div className="flex-1 flex flex-col items-center justify-center text-center space-y-6">
+                        <span className="text-sm font-bold text-slate-400 mb-2">
+                            Question {currentQuestionIndex + 1} / {filteredWords.length}
+                        </span>
                         
-                        <h2 className="text-4xl font-black text-slate-800 mb-6">{currentWord.english}</h2>
+                        <h2 className="text-4xl font-black text-slate-800 mb-2">{currentWord.english}</h2>
                         
                         <button 
-                             onClick={() => window.open(currentWord.pronunciationURL, '_blank')}
-                             className="mb-8 w-10 h-10 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center hover:bg-indigo-200"
+                            onClick={() => window.open(currentWord.pronunciationURL, '_blank')}
+                            className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center hover:bg-indigo-200 transition-colors"
                         >
                             <i className="fa-solid fa-volume-high"></i>
                         </button>
 
-                        {showAnswer ? (
-                            <div className="animate-fade-in space-y-2">
-                                <p className="text-2xl font-bold text-indigo-600">{currentWord.meaning}</p>
-                                <p className="text-slate-500 italic text-sm">{currentWord.partOfSpeech.join(', ')}</p>
+                        {/* 入力フォーム */}
+                        {!showAnswer ? (
+                            <div className="w-full max-w-md space-y-4">
+                                <input 
+                                    type="text" 
+                                    value={currentAnswer}
+                                    onChange={(e) => setUserAnswers(prev => ({ ...prev, [currentQuestionIndex]: e.target.value }))}
+                                    placeholder="Enter the meaning..."
+                                    className="w-full neumorph-pressed rounded-xl px-4 py-3 text-slate-700 outline-none focus:ring-2 focus:ring-indigo-200 text-center text-lg placeholder-slate-400"
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && currentAnswer.trim()) {
+                                            setShowAnswer(true);
+                                        }
+                                    }}
+                                    autoFocus
+                                />
+                                <button 
+                                    onClick={() => setShowAnswer(true)}
+                                    disabled={!currentAnswer.trim()}
+                                    className="neumorph-btn px-8 py-3 rounded-full text-indigo-600 font-bold disabled:opacity-50 disabled:cursor-not-allowed hover:bg-indigo-50 transition-colors"
+                                >
+                                    Check Answer
+                                </button>
                             </div>
                         ) : (
-                            <button 
-                                onClick={() => setShowAnswer(true)}
-                                className="neumorph-btn px-6 py-2 rounded-full text-indigo-600 font-bold"
-                            >
-                                Show Meaning
-                            </button>
+                            <div className="w-full max-w-md space-y-4 animate-fade-in">
+                                {/* ユーザーの回答と正解の比較 */}
+                                <div className="space-y-3">
+                                    <div className="bg-slate-50 rounded-xl p-4 border-2 border-slate-200">
+                                        <p className="text-xs font-bold text-slate-400 mb-1 uppercase tracking-wider">Your Answer</p>
+                                        <p className="text-lg font-bold text-slate-700">
+                                            {currentAnswer || '(No answer)'}
+                                        </p>
+                                    </div>
+                                    
+                                    <div className="bg-indigo-50 rounded-xl p-4 border-2 border-indigo-200">
+                                        <p className="text-xs font-bold text-indigo-400 mb-1 uppercase tracking-wider">Correct Answer</p>
+                                        <p className="text-lg font-bold text-indigo-600">{currentWord.meaning}</p>
+                                    </div>
+                                </div>
+
+                                {/* 追加情報 */}
+                                <div className="text-slate-500 text-sm">
+                                    <p className="italic">{currentWord.partOfSpeech.join(', ')}</p>
+                                </div>
+
+                                {/* 習熟度変更ボタン */}
+                                {currentWord.status === 'Beginner' && (
+                                    <button 
+                                        onClick={() => handleStatusUpgrade(currentWord.id)}
+                                        disabled={upgradingStatus[currentWord.id]}
+                                        className="w-full neumorph-btn px-6 py-3 rounded-xl text-indigo-600 font-bold hover:bg-indigo-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                                    >
+                                        {upgradingStatus[currentWord.id] ? (
+                                            <>
+                                                <i className="fa-solid fa-circle-notch fa-spin"></i>
+                                                <span>Upgrading...</span>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <i className="fa-solid fa-arrow-up"></i>
+                                                <span>Upgrade to Training</span>
+                                            </>
+                                        )}
+                                    </button>
+                                )}
+
+                                {currentWord.status === 'Training' && (
+                                    <button 
+                                        onClick={() => handleStatusDowngrade(currentWord.id)}
+                                        disabled={upgradingStatus[currentWord.id]}
+                                        className="w-full neumorph-btn px-6 py-3 rounded-xl text-slate-600 font-bold hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                                    >
+                                        {upgradingStatus[currentWord.id] ? (
+                                            <>
+                                                <i className="fa-solid fa-circle-notch fa-spin"></i>
+                                                <span>Downgrading...</span>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <i className="fa-solid fa-arrow-down"></i>
+                                                <span>Downgrade to Beginner</span>
+                                            </>
+                                        )}
+                                    </button>
+                                )}
+
+                                {currentWord.status === 'Mastered' && (
+                                    <button 
+                                        onClick={() => handleMasteredDowngrade(currentWord.id)}
+                                        disabled={upgradingStatus[currentWord.id]}
+                                        className="w-full neumorph-btn px-6 py-3 rounded-xl text-slate-600 font-bold hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                                    >
+                                        {upgradingStatus[currentWord.id] ? (
+                                            <>
+                                                <i className="fa-solid fa-circle-notch fa-spin"></i>
+                                                <span>Downgrading...</span>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <i className="fa-solid fa-arrow-down"></i>
+                                                <span>Downgrade to Training</span>
+                                            </>
+                                        )}
+                                    </button>
+                                )}
+                            </div>
                         )}
                     </div>
 
-                    <div className="mt-8 flex justify-between">
+                    <div className="mt-8 flex justify-between items-center">
                         <button 
                             disabled={currentQuestionIndex === 0}
                             onClick={() => {
                                 setCurrentQuestionIndex(p => p - 1);
                                 setShowAnswer(false);
                             }}
-                            className="px-4 py-2 text-slate-500 disabled:opacity-30"
+                            className="px-4 py-2 text-slate-500 disabled:opacity-30 hover:text-slate-700 transition-colors flex items-center gap-2"
                         >
                             <i className="fa-solid fa-chevron-left"></i> Prev
                         </button>
+                        
+                        <button 
+                            onClick={() => {
+                                setShowAnswer(false);
+                                setUserAnswers(prev => ({ ...prev, [currentQuestionIndex]: '' }));
+                            }}
+                            className="px-4 py-2 text-slate-400 hover:text-slate-600 transition-colors text-sm"
+                        >
+                            <i className="fa-solid fa-redo mr-1"></i> Try Again
+                        </button>
+                        
                         <button 
                             disabled={currentQuestionIndex === filteredWords.length - 1}
                             onClick={() => {
                                 setCurrentQuestionIndex(p => p + 1);
                                 setShowAnswer(false);
                             }}
-                            className="px-4 py-2 text-indigo-600 font-bold disabled:opacity-30"
+                            className="px-4 py-2 text-indigo-600 font-bold disabled:opacity-30 hover:text-indigo-700 transition-colors flex items-center gap-2"
                         >
-                            Next <i className="fa-solid fa-chevron-right ml-1"></i>
+                            Next <i className="fa-solid fa-chevron-right"></i>
                         </button>
                     </div>
                 </div>
@@ -354,7 +528,7 @@ export const QuizModal: React.FC<QuizModalProps> = ({ words, onClose, onUpdate }
                         <i className="fa-solid fa-robot"></i>
                         <span>AI Tutor (Japanese Support)</span>
                     </div>
-                    <button onClick={onClose} className="w-8 h-8 rounded-full hover:bg-black/5 flex items-center justify-center">
+                    <button onClick={onClose} className="w-8 h-8 rounded-full hover:bg-black/5 flex items-center justify-center transition-colors">
                         <i className="fa-solid fa-times"></i>
                     </button>
                 </div>

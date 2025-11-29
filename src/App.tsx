@@ -43,7 +43,7 @@ function App() {
     if (node) observer.current.observe(node);
   }, [loading, hasMore]);
 
-  const loadWords = async (reset = false) => {
+  const loadWords = useCallback(async (reset = false) => {
     setLoading(true);
     const startAfter = reset ? null : lastVisible;
     const { words: newWords, lastVisible: newLast } = await fetchWords(startAfter);
@@ -55,11 +55,25 @@ function App() {
         setLastVisible(newLast);
     }
     setLoading(false);
-  };
+  }, [lastVisible]);
 
   useEffect(() => {
     loadWords(true);
   }, []);
+
+  // 時間経過による自動読み込み
+  useEffect(() => {
+    if (!hasMore) return; // これ以上読み込むデータがない場合はタイマーを設定しない
+
+    const interval = setInterval(() => {
+      // 読み込み中でなく、まだ読み込むデータがある場合のみ実行
+      if (!loading && hasMore) {
+        loadWords();
+      }
+    }, 1000); // 5秒ごとに自動読み込み（必要に応じて調整可能）
+
+    return () => clearInterval(interval);
+  }, [loading, hasMore, lastVisible]);
 
   const handleRefresh = () => {
       loadWords(true);
