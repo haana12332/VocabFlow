@@ -132,7 +132,7 @@ function App() {
       if (!loading && hasMore) {
         loadWords();
       }
-    }, 5000); // 5秒ごとに自動読み込み（必要に応じて調整可能）
+    }, 1000); // 1秒ごとに自動読み込み（必要に応じて調整可能）
 
     return () => clearInterval(interval);
   }, [loading, hasMore, lastVisible]);
