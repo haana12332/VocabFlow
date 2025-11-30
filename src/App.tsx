@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
 import { Navbar } from './components/Navbar';
 import { WordCard } from './components/WordCard';
 import { AddWordModal } from './components/AddWordModal';
@@ -7,6 +7,66 @@ import { QuizModal } from './components/QuizModal';
 import { WordDetailModal } from './components/WordDetailModal';
 import { fetchWords, deleteWord } from './firebase';
 import { WordDocument, WordStatus } from './types';
+
+// Helper function to compare arrays
+const arraysEqual = (a: string[], b: string[]): boolean => {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+};
+
+// Reusable Filter Pill Component - defined outside to prevent recreation
+// Memoized to prevent re-rendering when words update, which would close the dropdown
+const FilterPill = memo(({ 
+  icon, 
+  label, 
+  value, 
+  onChange, 
+  options 
+}: { 
+  icon: string, 
+  label: string, 
+  value: string, 
+  onChange: (val: string) => void, 
+  options: string[] 
+}) => {
+  // Ensure the selected value is always in the options list to prevent it from disappearing
+  // Use options.join(',') as dependency to only recalculate when content actually changes
+  const allOptions = useMemo(() => {
+    return Array.from(new Set([...options, ...(value !== 'All' ? [value] : [])])).sort();
+  }, [options.join(','), value]);
+  
+  return (
+    <div className="relative group">
+        <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-full shadow-sm border border-slate-100 group-hover:border-indigo-100 transition-colors">
+            <i className={`fa-solid ${icon} text-slate-400 text-xs`}></i>
+            <div className="flex flex-col">
+                <span className="text-[9px] font-bold text-slate-400 uppercase leading-none tracking-wider">{label}</span>
+                <select 
+                    value={value}
+                    onChange={(e) => onChange(e.target.value)}
+                    className="text-xs font-bold text-slate-700 outline-none bg-transparent appearance-none cursor-pointer pr-4"
+                >
+                    <option value="All">All</option>
+                    {allOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                </select>
+            </div>
+            <i className="fa-solid fa-chevron-down text-[8px] text-slate-300 absolute right-3 pointer-events-none"></i>
+        </div>
+    </div>
+  );
+}, (prevProps, nextProps) => {
+  // Only re-render if value, options content, or onChange actually changed
+  // Use efficient array comparison to prevent unnecessary re-renders
+  // This prevents the dropdown from closing when words update but options content stays the same
+  return prevProps.value === nextProps.value &&
+         prevProps.icon === nextProps.icon &&
+         prevProps.label === nextProps.label &&
+         prevProps.onChange === nextProps.onChange &&
+         arraysEqual(prevProps.options, nextProps.options);
+});
 
 function App() {
   const [words, setWords] = useState<WordDocument[]>([]);
@@ -29,6 +89,8 @@ function App() {
   const [filterStatus, setFilterStatus] = useState<string>('All');
   const [filterPos, setFilterPos] = useState<string>('All');
   const [filterToeic, setFilterToeic] = useState<string>('All');
+  const [filterDateFrom, setFilterDateFrom] = useState<string>('');
+  const [filterDateTo, setFilterDateTo] = useState<string>('');
 
   // Infinite Scroll Observer
   const observer = useRef<IntersectionObserver | null>(null);
@@ -70,7 +132,7 @@ function App() {
       if (!loading && hasMore) {
         loadWords();
       }
-    }, 1000); // 5秒ごとに自動読み込み（必要に応じて調整可能）
+    }, 5000); // 5秒ごとに自動読み込み（必要に応じて調整可能）
 
     return () => clearInterval(interval);
   }, [loading, hasMore, lastVisible]);
@@ -90,8 +152,33 @@ function App() {
   };
 
   // Derive Filter Options dynamically from loaded words
-  const uniqueCategories = Array.from(new Set(words.map(w => w.category))).sort();
-  const uniquePos = Array.from(new Set(words.flatMap(w => w.partOfSpeech))).sort();
+  // Include currently selected filter values to prevent them from disappearing when new words load
+  // Use useMemo with stable string dependencies to prevent unnecessary recalculations that would close the dropdown
+  const categoriesString = useMemo(() => 
+    Array.from(new Set(words.map(w => w.category))).sort().join(','), 
+    [words.length, words.map(w => w.category).join(',')]
+  );
+  
+  const uniqueCategories = useMemo(() => {
+    const categories = categoriesString ? categoriesString.split(',') : [];
+    return Array.from(new Set([
+      ...categories,
+      ...(filterCategory !== 'All' ? [filterCategory] : [])
+    ])).sort();
+  }, [categoriesString, filterCategory]);
+  
+  const posString = useMemo(() => 
+    Array.from(new Set(words.flatMap(w => w.partOfSpeech))).sort().join(','), 
+    [words.length, words.flatMap(w => w.partOfSpeech).join(',')]
+  );
+  
+  const uniquePos = useMemo(() => {
+    const pos = posString ? posString.split(',') : [];
+    return Array.from(new Set([
+      ...pos,
+      ...(filterPos !== 'All' ? [filterPos] : [])
+    ])).sort();
+  }, [posString, filterPos]);
 
   // Client-side filtering/sorting for the visible list
   const processedWords = words
@@ -109,6 +196,24 @@ function App() {
             const minScore = parseInt(filterToeic);
             if ((w.toeicLevel || 0) < minScore) return false;
         }
+        
+        // Date range filter
+        if (filterDateFrom || filterDateTo) {
+            const wordDate = w.createdAt?.seconds ? new Date(w.createdAt.seconds * 1000) : null;
+            if (!wordDate) return false;
+            
+            if (filterDateFrom) {
+                const fromDate = new Date(filterDateFrom);
+                fromDate.setHours(0, 0, 0, 0);
+                if (wordDate < fromDate) return false;
+            }
+            
+            if (filterDateTo) {
+                const toDate = new Date(filterDateTo);
+                toDate.setHours(23, 59, 59, 999);
+                if (wordDate > toDate) return false;
+            }
+        }
 
         return true;
     })
@@ -118,38 +223,6 @@ function App() {
         return a.english.localeCompare(b.english);
     });
 
-  // Reusable Filter Pill Component
-  const FilterPill = ({ 
-    icon, 
-    label, 
-    value, 
-    onChange, 
-    options 
-  }: { 
-    icon: string, 
-    label: string, 
-    value: string, 
-    onChange: (val: string) => void, 
-    options: string[] 
-  }) => (
-    <div className="relative group">
-        <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-full shadow-sm border border-slate-100 group-hover:border-indigo-100 transition-colors">
-            <i className={`fa-solid ${icon} text-slate-400 text-xs`}></i>
-            <div className="flex flex-col">
-                <span className="text-[9px] font-bold text-slate-400 uppercase leading-none tracking-wider">{label}</span>
-                <select 
-                    value={value}
-                    onChange={(e) => onChange(e.target.value)}
-                    className="text-xs font-bold text-slate-700 outline-none bg-transparent appearance-none cursor-pointer pr-4"
-                >
-                    <option value="All">All</option>
-                    {options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                </select>
-            </div>
-            <i className="fa-solid fa-chevron-down text-[8px] text-slate-300 absolute right-3 pointer-events-none"></i>
-        </div>
-    </div>
-  );
 
   return (
     <div className="min-h-screen pb-20">
@@ -243,13 +316,54 @@ function App() {
                     options={['400', '600', '730', '860']} 
                 />
                 
-                {(filterCategory !== 'All' || filterStatus !== 'All' || filterPos !== 'All' || filterToeic !== 'All') && (
+                {/* Date Range Filter */}
+                <div className="relative group">
+                    <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-full shadow-sm border border-slate-100 group-hover:border-indigo-100 transition-colors">
+                        <i className="fa-solid fa-calendar-days text-slate-400 text-xs"></i>
+                        <div className="flex flex-col gap-1">
+                            <span className="text-[9px] font-bold text-slate-400 uppercase leading-none tracking-wider">Date Range</span>
+                            <div className="flex items-center gap-2">
+                                <input
+                                    type="date"
+                                    value={filterDateFrom}
+                                    onChange={(e) => setFilterDateFrom(e.target.value)}
+                                    className="text-xs font-bold text-slate-700 outline-none bg-transparent border-b border-slate-200 focus:border-indigo-400 transition-colors w-24"
+                                    placeholder="From"
+                                />
+                                <span className="text-slate-300 text-xs">~</span>
+                                <input
+                                    type="date"
+                                    value={filterDateTo}
+                                    onChange={(e) => setFilterDateTo(e.target.value)}
+                                    className="text-xs font-bold text-slate-700 outline-none bg-transparent border-b border-slate-200 focus:border-indigo-400 transition-colors w-24"
+                                    placeholder="To"
+                                />
+                                {(filterDateFrom || filterDateTo) && (
+                                    <button
+                                        onClick={() => {
+                                            setFilterDateFrom('');
+                                            setFilterDateTo('');
+                                        }}
+                                        className="text-slate-400 hover:text-indigo-500 transition-colors"
+                                        title="Clear date filter"
+                                    >
+                                        <i className="fa-solid fa-times text-xs"></i>
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                {(filterCategory !== 'All' || filterStatus !== 'All' || filterPos !== 'All' || filterToeic !== 'All' || filterDateFrom || filterDateTo) && (
                     <button 
                         onClick={() => {
                             setFilterCategory('All');
                             setFilterStatus('All');
                             setFilterPos('All');
                             setFilterToeic('All');
+                            setFilterDateFrom('');
+                            setFilterDateTo('');
                         }}
                         className="ml-auto text-xs font-bold text-slate-400 hover:text-indigo-500 px-3 py-1 rounded-full hover:bg-white transition-colors flex items-center gap-1"
                     >

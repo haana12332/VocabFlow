@@ -38,7 +38,7 @@ export const addWordToFirestore = async (wordData: Omit<WordDocument, 'id' | 'cr
   try {
     const docRef = await addDoc(collection(db, WORDS_COLLECTION), {
       ...wordData,
-      createdAt: Timestamp.now(),
+      createdAt: Timestamp.now(), 
       comment :''
     });
     return docRef.id;
