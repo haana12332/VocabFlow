@@ -2,6 +2,18 @@ import { Timestamp } from "firebase/firestore";
 
 export type WordStatus = "Beginner" | "Training" | "Mastered";
 
+export interface UserProfile {
+  uid: string;
+  email: string | null;
+  displayName: string | null;
+  createdAt: any;
+  settings?: {
+    language?: string;     // 母国語設定
+    geminiKey?: string;    // APIキー
+    firebaseConfig?: string; // Firebase設定 (必要な場合)
+  };
+}
+
 export interface AIWordResponse {
   id?: string;
   pronunciationURL: string;

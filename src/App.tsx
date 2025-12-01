@@ -2,10 +2,13 @@ import React, { useState, useEffect, useRef, useCallback, useMemo, memo } from '
 import { Navbar } from './components/Navbar';
 import { WordCard } from './components/WordCard';
 import { AddWordModal } from './components/AddWordModal';
+import { Settings } from './components/Settings'; 
 import { FlashcardView } from './components/FlashcardView';
 import { QuizModal } from './components/QuizModal';
 import { WordDetailModal } from './components/WordDetailModal';
-import { fetchWords, deleteWord } from './firebase';
+import { Login } from './components/Login'; 
+import { fetchWords, deleteWord, auth, getUserProfile } from './firebase'; 
+import { onAuthStateChanged, User, signOut } from 'firebase/auth';
 import { WordDocument, WordStatus } from './types';
 
 // Helper function to compare arrays
@@ -17,8 +20,7 @@ const arraysEqual = (a: string[], b: string[]): boolean => {
   return true;
 };
 
-// Reusable Filter Pill Component - defined outside to prevent recreation
-// Memoized to prevent re-rendering when words update, which would close the dropdown
+// Reusable Filter Pill Component
 const FilterPill = memo(({ 
   icon, 
   label, 
@@ -32,8 +34,6 @@ const FilterPill = memo(({
   onChange: (val: string) => void, 
   options: string[] 
 }) => {
-  // Ensure the selected value is always in the options list to prevent it from disappearing
-  // Use options.join(',') as dependency to only recalculate when content actually changes
   const allOptions = useMemo(() => {
     return Array.from(new Set([...options, ...(value !== 'All' ? [value] : [])])).sort();
   }, [options.join(','), value]);
@@ -58,9 +58,6 @@ const FilterPill = memo(({
     </div>
   );
 }, (prevProps, nextProps) => {
-  // Only re-render if value, options content, or onChange actually changed
-  // Use efficient array comparison to prevent unnecessary re-renders
-  // This prevents the dropdown from closing when words update but options content stays the same
   return prevProps.value === nextProps.value &&
          prevProps.icon === nextProps.icon &&
          prevProps.label === nextProps.label &&
@@ -69,6 +66,14 @@ const FilterPill = memo(({
 });
 
 function App() {
+  // Auth State
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  
+  // ★重要: 設定が確認済みかどうかのフラグ (これをtrueにするまで単語読み込みをブロック)
+  const [isConfigVerified, setIsConfigVerified] = useState(false);
+
+  // App State
   const [words, setWords] = useState<WordDocument[]>([]);
   const [lastVisible, setLastVisible] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -77,6 +82,7 @@ function App() {
   // Modals
   const [showAddModal, setShowAddModal] = useState(false);
   const [showQuizModal, setShowQuizModal] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [showFlashcardView, setShowFlashcardView] = useState(false);
   const [selectedWord, setSelectedWord] = useState<WordDocument | null>(null);
 
@@ -84,13 +90,78 @@ function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest' | 'a-z'>('newest');
   
-  // New Filters
   const [filterCategory, setFilterCategory] = useState<string>('All');
   const [filterStatus, setFilterStatus] = useState<string>('All');
   const [filterPos, setFilterPos] = useState<string>('All');
   const [filterToeic, setFilterToeic] = useState<string>('All');
   const [filterDateFrom, setFilterDateFrom] = useState<string>('');
   const [filterDateTo, setFilterDateTo] = useState<string>('');
+
+  // ユーザー認証の監視 & 設定同期
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      // ユーザーセット前に、config未確認状態に戻す
+      if (!currentUser) {
+          setIsConfigVerified(false);
+          setUser(null);
+          setAuthLoading(false);
+          return;
+      }
+
+      try {
+          // 1. まずユーザー設定をFirestoreから取得
+          const profile = await getUserProfile(currentUser.uid);
+          
+          if (profile?.settings) {
+              let needsReload = false;
+
+              // 2. 言語設定の同期
+              if (profile.settings.language) {
+                  const currentLang = localStorage.getItem('app_language');
+                  if (currentLang !== profile.settings.language) {
+                      localStorage.setItem('app_language', profile.settings.language);
+                  }
+              }
+
+              // 3. Geminiキーの同期
+              if (profile.settings.geminiKey) {
+                  const currentGemini = localStorage.getItem('gemini_api_key');
+                  if (currentGemini !== profile.settings.geminiKey) {
+                      localStorage.setItem('gemini_api_key', profile.settings.geminiKey);
+                  }
+              }
+
+              // 4. Firebase Configの同期とリロード判定
+              const remoteConfig = profile.settings.firebaseConfig;
+              const currentConfig = localStorage.getItem('custom_firebase_config');
+
+              // リモートに設定があり、かつローカルと異なる場合は更新してリロード
+              if (remoteConfig && remoteConfig !== currentConfig) {
+                  console.log("Detecting new database config. Syncing and reloading...");
+                  localStorage.setItem('custom_firebase_config', remoteConfig);
+                  needsReload = true;
+              }
+
+              // 設定が変わった場合はリロードして、新しいDB接続でアプリを再起動させる
+              if (needsReload) {
+                  window.location.reload();
+                  return; // ここで処理終了 (リロード待ち)
+              }
+          }
+      } catch (error) {
+          console.error("Failed to sync user settings", error);
+      }
+
+      // 同期・確認完了後、ステートを更新してアプリを開始
+      setWords([]);
+      setLastVisible(null);
+      setHasMore(true);
+      setUser(currentUser);
+      setAuthLoading(false);
+      setIsConfigVerified(true); // ★ここで初めて「読み込み許可」を出す
+    });
+    return () => unsubscribe();
+  }, []);
 
   // Infinite Scroll Observer
   const observer = useRef<IntersectionObserver | null>(null);
@@ -106,6 +177,9 @@ function App() {
   }, [loading, hasMore]);
 
   const loadWords = useCallback(async (reset = false) => {
+    // ★重要: ユーザーがいない、または設定確認が完了していない場合は読み込まない
+    if (!user || !isConfigVerified) return;
+
     setLoading(true);
     const startAfter = reset ? null : lastVisible;
     const { words: newWords, lastVisible: newLast } = await fetchWords(startAfter);
@@ -117,25 +191,42 @@ function App() {
         setLastVisible(newLast);
     }
     setLoading(false);
-  }, [lastVisible]);
+  }, [lastVisible, user, isConfigVerified]); // 依存配列にisConfigVerifiedを追加
 
+  // 初期データ読み込み
   useEffect(() => {
-    loadWords(true);
-  }, []);
+    if (user && !authLoading && isConfigVerified) {
+        loadWords(true);
+    }
+  }, [user, authLoading, isConfigVerified]); // loadWordsは除外推奨（無限ループ防止）
 
   // 時間経過による自動読み込み
   useEffect(() => {
-    if (!hasMore) return; // これ以上読み込むデータがない場合はタイマーを設定しない
+    if (!hasMore || !user || !isConfigVerified) return; 
 
     const interval = setInterval(() => {
-      // 読み込み中でなく、まだ読み込むデータがある場合のみ実行
       if (!loading && hasMore) {
         loadWords();
       }
-    }, 1000); // 1秒ごとに自動読み込み（必要に応じて調整可能）
+    }, 5000);
 
     return () => clearInterval(interval);
-  }, [loading, hasMore, lastVisible]);
+  }, [loading, hasMore, lastVisible, user, isConfigVerified]);
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      setWords([]); 
+      setShowSettings(false); 
+      // ログアウト時は設定をクリアして、次回別ユーザーでログインした際の混入を防ぐ
+      localStorage.removeItem('custom_firebase_config'); 
+      localStorage.removeItem('gemini_api_key');
+      // リロードして初期状態（デフォルトDB）に戻す
+      window.location.reload();
+    } catch (error) {
+      console.error("Logout error", error);
+    }
+  };
 
   const handleRefresh = () => {
       loadWords(true);
@@ -151,9 +242,7 @@ function App() {
       setWords(prev => prev.map(w => w.id === wordId ? { ...w, status: newStatus } : w));
   };
 
-  // Derive Filter Options dynamically from loaded words
-  // Include currently selected filter values to prevent them from disappearing when new words load
-  // Use useMemo with stable string dependencies to prevent unnecessary recalculations that would close the dropdown
+  // Derive Filter Options
   const categoriesString = useMemo(() => 
     Array.from(new Set(words.map(w => w.category))).sort().join(','), 
     [words.length, words.map(w => w.category).join(',')]
@@ -180,15 +269,13 @@ function App() {
     ])).sort();
   }, [posString, filterPos]);
 
-  // Client-side filtering/sorting for the visible list
+  // Client-side filtering/sorting
   const processedWords = words
     .filter(w => {
-        // Search
         const matchesSearch = w.english.toLowerCase().includes(searchTerm.toLowerCase()) || 
                               w.meaning.includes(searchTerm);
         if (!matchesSearch) return false;
 
-        // Filters
         if (filterCategory !== 'All' && w.category !== filterCategory) return false;
         if (filterStatus !== 'All' && w.status !== filterStatus) return false;
         if (filterPos !== 'All' && !w.partOfSpeech.includes(filterPos)) return false;
@@ -197,7 +284,6 @@ function App() {
             if ((w.toeicLevel || 0) < minScore) return false;
         }
         
-        // Date range filter
         if (filterDateFrom || filterDateTo) {
             const wordDate = w.createdAt?.seconds ? new Date(w.createdAt.seconds * 1000) : null;
             if (!wordDate) return false;
@@ -223,19 +309,32 @@ function App() {
         return a.english.localeCompare(b.english);
     });
 
+  if (authLoading || (user && !isConfigVerified)) {
+    return (
+        <div className="min-h-screen flex items-center justify-center bg-[#f0f4f8]">
+            <i className="fa-solid fa-circle-notch fa-spin text-3xl text-indigo-400"></i>
+        </div>
+    );
+  }
+
+  if (!user) {
+    return <Login />;
+  }
 
   return (
-    <div className="min-h-screen pb-20">
-      <Navbar 
-        toggleAddModal={() => setShowAddModal(true)} 
-        toggleQuizMode={() => setShowQuizModal(true)}
-      />
+    <div className="min-h-screen pb-20 bg-[#f0f4f8]">
+      <div className="bg-[#f0f4f8]">
+        <Navbar 
+            toggleQuizMode={() => setShowQuizModal(true)}
+            toggleAddModal={() => setShowAddModal(true)}
+            toggleSettings={() => setShowSettings(true)}
+        />
+      </div>
 
-      <div className="max-w-7xl mx-auto px-4">
+      <div className="max-w-7xl mx-auto px-4 pt-4">
         
         {/* Controls Section */}
         <div className="flex flex-col gap-6 mb-8">
-            {/* Top Row: Search and Sort */}
             <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                 <div className="relative w-full md:w-96 group">
                     <i className="fa-solid fa-search absolute left-5 top-1/2 transform -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-500 transition-colors"></i>
@@ -249,7 +348,7 @@ function App() {
                 </div>
                 
                 <div className="flex items-center gap-4 w-full md:w-auto">
-                     <button 
+                      <button 
                         onClick={() => setShowFlashcardView(true)}
                         disabled={words.length === 0}
                         className="flex-1 md:flex-none neumorph-btn h-12 px-5 rounded-2xl text-indigo-600 font-bold flex items-center justify-center gap-2 text-sm hover:-translate-y-0.5 transition-all disabled:opacity-50 disabled:translate-y-0 disabled:shadow-none"
@@ -278,9 +377,9 @@ function App() {
                 </div>
             </div>
 
-            {/* Elegant Filter Bar */}
+            {/* Filter Bar */}
             <div className="flex flex-wrap items-center gap-3 pb-2">
-                <div className="text-xs font-bold text-slate-400 mr-2 uppercase tracking-widest flex items-center gap-1">
+                 <div className="text-xs font-bold text-slate-400 mr-2 uppercase tracking-widest flex items-center gap-1">
                     <i className="fa-solid fa-sliders"></i> Filters
                 </div>
                 
@@ -315,9 +414,9 @@ function App() {
                     onChange={setFilterToeic} 
                     options={['400', '600', '730', '860']} 
                 />
-                
-                {/* Date Range Filter */}
-                <div className="relative group">
+
+                {/* Date Filter */}
+                 <div className="relative group">
                     <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-full shadow-sm border border-slate-100 group-hover:border-indigo-100 transition-colors">
                         <i className="fa-solid fa-calendar-days text-slate-400 text-xs"></i>
                         <div className="flex flex-col gap-1">
@@ -328,7 +427,6 @@ function App() {
                                     value={filterDateFrom}
                                     onChange={(e) => setFilterDateFrom(e.target.value)}
                                     className="text-xs font-bold text-slate-700 outline-none bg-transparent border-b border-slate-200 focus:border-indigo-400 transition-colors w-24"
-                                    placeholder="From"
                                 />
                                 <span className="text-slate-300 text-xs">~</span>
                                 <input
@@ -336,7 +434,6 @@ function App() {
                                     value={filterDateTo}
                                     onChange={(e) => setFilterDateTo(e.target.value)}
                                     className="text-xs font-bold text-slate-700 outline-none bg-transparent border-b border-slate-200 focus:border-indigo-400 transition-colors w-24"
-                                    placeholder="To"
                                 />
                                 {(filterDateFrom || filterDateTo) && (
                                     <button
@@ -345,7 +442,6 @@ function App() {
                                             setFilterDateTo('');
                                         }}
                                         className="text-slate-400 hover:text-indigo-500 transition-colors"
-                                        title="Clear date filter"
                                     >
                                         <i className="fa-solid fa-times text-xs"></i>
                                     </button>
@@ -354,7 +450,7 @@ function App() {
                         </div>
                     </div>
                 </div>
-                
+
                 {(filterCategory !== 'All' || filterStatus !== 'All' || filterPos !== 'All' || filterToeic !== 'All' || filterDateFrom || filterDateTo) && (
                     <button 
                         onClick={() => {
@@ -433,6 +529,14 @@ function App() {
             words={words} 
             onClose={() => setShowQuizModal(false)}
             onUpdate={handleRefresh}
+          />
+      )}
+      
+      {showSettings && user && (
+          <Settings
+            onClose={() => setShowSettings(false)}
+            onLogout={handleLogout}
+            userId={user.uid}
           />
       )}
 

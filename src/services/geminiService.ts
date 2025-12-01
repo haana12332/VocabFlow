@@ -1,15 +1,38 @@
-// 1. Schema をインポートに追加します
 import { GoogleGenerativeAI, SchemaType, Schema } from "@google/generative-ai";
 import { WordDocument } from "../types";
 
-const API_KEY = import.meta.env.VITE_GOOGLE_AI_KEY;
-
-if (!API_KEY) {
-  console.error("エラー: Google AI APIキーが見つかりません。.envファイルを確認してください。");
-}
-
-const ai = new GoogleGenerativeAI(API_KEY);
 const MODEL_NAME = "gemini-2.5-flash";
+
+// --- ヘルパー関数: 設定とAIクライアントを動的に取得 ---
+const getAIConfig = () => {
+  // 1. APIキーの取得 (localStorage優先 -> 環境変数)
+  const localKey = localStorage.getItem('gemini_api_key');
+  // const apiKey = localKey || import.meta.env.VITE_GOOGLE_AI_KEY;
+  const apiKey = localKey
+
+  if (!apiKey) {
+    console.error("エラー: Google AI APIキーが見つかりません。設定画面か.envファイルを確認してください。");
+    throw new Error("API Key is missing");
+  }
+
+  // 2. 言語設定の取得と変換
+  const langCode = localStorage.getItem('app_language') || 'en';
+  
+  // プロンプト用に言語名を変換
+  const langMap: Record<string, string> = {
+    'ja': 'Japanese',
+    'en': 'English', // 英語設定の場合は英英定義になります
+    'es': 'Spanish',
+    'ko': 'Korean'
+  };
+  const targetLang = langMap[langCode] || 'English';
+
+  return {
+    ai: new GoogleGenerativeAI(apiKey),
+    targetLang,
+    langCode
+  };
+};
 
 // 2. 変数に : Schema という型注釈を付け、as const は削除します
 const WORD_SCHEMA: Schema = {
@@ -66,16 +89,19 @@ const cleanJsonString = (text: string): string => {
 };
 
 export const generateWordInfo = async (englishWord: string): Promise<Partial<WordDocument>> => {
+  // 設定を動的に取得
+  const { ai, targetLang } = getAIConfig();
+
   const prompt = `Generate detailed vocabulary information for the English word/phrase "${englishWord}".
   Return a JSON object.
   Fields required:
   - english: string (the word itself)
-  - meaning: string (Japanese meaning)
-  - coreImage: string (Brief explanation of the core image/etymology in Japanese)
+  - meaning: string (Meaning or Translation in **${targetLang}**)
+  - coreImage: string (Brief explanation of the core image/etymology in **${targetLang}**)
   - category: string ( Category when use this word must be strictly one of the following: Business, Daily, Health, Technology, Shopping, Finance, Restaurants, Emotions, Relationships, Nature, Transportation, Academic, Travel, Science, Other.)
   - partOfSpeech: array of strings (Must be in English, e.g., Noun, Verb, Adjective, Prepositions, Adverbs, Conjunctions, others). IMPORTANT: If the input contains spaces (e.g. "pick up", "sort out"), STRICTLY classify it as "Idiom".
   - toeicLevel: number (Estimated TOEIC score level required for this word, Must be in 400, 600, 730, 860, 990)
-  - examples: array of objects with 'sentence' (English) and 'translation' (Japanese)
+  - examples: array of objects with 'sentence' (English) and 'translation' (Translation in **${targetLang}**)
   `;
 
   const model = ai.getGenerativeModel({
@@ -112,16 +138,19 @@ export const generateWordInfo = async (englishWord: string): Promise<Partial<Wor
 };
 
 export const generateBulkWordInfo = async (inputString: string): Promise<Partial<WordDocument>[]> => {
+  // 設定を動的に取得
+  const { ai, targetLang } = getAIConfig();
+
   const prompt = `Generate detailed vocabulary information for the following English words: "${inputString}".
     Return a JSON Array of objects.
     Fields required for each object:
     - english: string
-    - meaning: string (Japanese) 
-    - coreImage: string (Japanese) (Brief explanation of the core image/etymology in Japanese)
+    - meaning: string (Meaning or Translation in **${targetLang}**) 
+    - coreImage: string (Brief explanation of the core image/etymology in **${targetLang}**)
     - category: string  Category when use this word must be strictly one of the following: Business, Daily, Health, Technology, Shopping, Finance, Restaurants, Emotions, Relationships, Nature, Transportation, Academic, Travel, Science, Other.)
     - partOfSpeech: array of strings (English). Set to 'Idiom' if it is a phrase.
     - toeicLevel: number (Estimated TOEIC score level required for this word, Must be in 400, 600, 730, 860, 990)
-    - examples: array of objects {sentence, translation}
+    - examples: array of objects {sentence, translation (in **${targetLang}**)}
     `;
 
   const model = ai.getGenerativeModel({
@@ -159,9 +188,12 @@ export const generateBulkWordInfo = async (inputString: string): Promise<Partial
 };
 
 export const createQuizChat = (words: WordDocument[]) => {
+  // 設定を動的に取得
+  const { ai, targetLang } = getAIConfig();
+
   const wordList = words.map(w => `${w.english} (${w.meaning})`).join(", ");
 
-  const systemInstruction = `You are an expert English teacher for Japanese students.
+  const systemInstruction = `You are an expert English teacher for students who speak **${targetLang}**.
   The user is studying these words: [${wordList}].
   
   Your goal is to quiz the user based on their specific requests (e.g. "Create a TOEIC 800 grammar question").
@@ -170,14 +202,14 @@ export const createQuizChat = (words: WordDocument[]) => {
   1. Wait for the user to tell you what kind of quiz they want.
   2. Create a question using the provided words if possible.
   3. CRITICAL RULES:
-     - The **Question** text must be in **ENGLISH**.
-     - The **Explanation/Feedback** must be in **JAPANESE**.
+      - The **Question** text must be in **ENGLISH**.
+      - The **Explanation/Feedback** must be in **${targetLang}**.
   4. Marking:
-     - If the user's answer is correct, start your response strictly with "【正解】".
-     - If it is incorrect, start with "【不正解】".
-     - Include the English word involved in the question in brackets like [WORD] after the result tag so the system can track it. 
+      - If the user's answer is correct, start your response strictly with "【正解】".
+      - If it is incorrect, start with "【不正解】".
+      - Include the English word involved in the question in brackets like [WORD] after the result tag so the system can track it. 
   
-  Example Interaction:
+  Example Interaction (assuming target language is Japanese):
   User: "TOEIC 800 grammar question please"
   AI: "Fill in the blank: The manager decided to _____ the meeting. (call off / pick up)"
   User: "call off"
