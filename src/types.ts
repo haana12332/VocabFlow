@@ -60,3 +60,9 @@ export interface ChatMessage {
   text: string;
   isCorrect?: boolean;
 }
+
+export interface DailyComment {
+  date: string;
+  content: string;
+  updatedAt: Timestamp;
+}

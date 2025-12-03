@@ -6,6 +6,7 @@ import { Settings } from './components/Settings';
 import { FlashcardView } from './components/FlashcardView';
 import { QuizModal } from './components/QuizModal';
 import { WordDetailModal } from './components/WordDetailModal';
+import { DailyCommentModal } from './components/DailyCommentModal'; // ★追加
 import { Login } from './components/Login'; 
 import { fetchWords, deleteWord, auth, getUserProfile } from './firebase'; 
 import { onAuthStateChanged, User, signOut } from 'firebase/auth';
@@ -70,7 +71,7 @@ function App() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   
-  // ★重要: 設定が確認済みかどうかのフラグ (これをtrueにするまで単語読み込みをブロック)
+  // 設定が確認済みかどうかのフラグ
   const [isConfigVerified, setIsConfigVerified] = useState(false);
 
   // App State
@@ -84,11 +85,14 @@ function App() {
   const [showQuizModal, setShowQuizModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showFlashcardView, setShowFlashcardView] = useState(false);
+  const [showDailyComment, setShowDailyComment] = useState(false); // ★追加
   const [selectedWord, setSelectedWord] = useState<WordDocument | null>(null);
 
   // Filter & Search State
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortOrder, setSortOrder] = useState<'newest' | 'oldest' | 'a-z'>('newest');
+  
+  // ソート順の型定義を拡張
+  const [sortOrder, setSortOrder] = useState<'newest' | 'oldest' | 'a-z' | 'z-a' | 'toeic-high' | 'toeic-low'>('newest');
   
   const [filterCategory, setFilterCategory] = useState<string>('All');
   const [filterStatus, setFilterStatus] = useState<string>('All');
@@ -96,11 +100,14 @@ function App() {
   const [filterToeic, setFilterToeic] = useState<string>('All');
   const [filterDateFrom, setFilterDateFrom] = useState<string>('');
   const [filterDateTo, setFilterDateTo] = useState<string>('');
+  
+  // 数値範囲フィルタ (インデックス用)
+  const [filterIndexFrom, setFilterIndexFrom] = useState<string>('');
+  const [filterIndexTo, setFilterIndexTo] = useState<string>('');
 
   // ユーザー認証の監視 & 設定同期
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      // ユーザーセット前に、config未確認状態に戻す
       if (!currentUser) {
           setIsConfigVerified(false);
           setUser(null);
@@ -158,7 +165,7 @@ function App() {
       setHasMore(true);
       setUser(currentUser);
       setAuthLoading(false);
-      setIsConfigVerified(true); // ★ここで初めて「読み込み許可」を出す
+      setIsConfigVerified(true); 
     });
     return () => unsubscribe();
   }, []);
@@ -177,7 +184,6 @@ function App() {
   }, [loading, hasMore]);
 
   const loadWords = useCallback(async (reset = false) => {
-    // ★重要: ユーザーがいない、または設定確認が完了していない場合は読み込まない
     if (!user || !isConfigVerified) return;
 
     setLoading(true);
@@ -191,14 +197,14 @@ function App() {
         setLastVisible(newLast);
     }
     setLoading(false);
-  }, [lastVisible, user, isConfigVerified]); // 依存配列にisConfigVerifiedを追加
+  }, [lastVisible, user, isConfigVerified]); 
 
   // 初期データ読み込み
   useEffect(() => {
     if (user && !authLoading && isConfigVerified) {
         loadWords(true);
     }
-  }, [user, authLoading, isConfigVerified]); // loadWordsは除外推奨（無限ループ防止）
+  }, [user, authLoading, isConfigVerified]);
 
   // 時間経過による自動読み込み
   useEffect(() => {
@@ -213,23 +219,37 @@ function App() {
     return () => clearInterval(interval);
   }, [loading, hasMore, lastVisible, user, isConfigVerified]);
 
+  // ★ Optimistic UI Updates (ソート・フィルタ維持) ★
+  const handleWordAdded = (newWord: WordDocument) => {
+    // リストの先頭に追加 (ソート条件等は維持される)
+    setWords(prev => [newWord, ...prev]);
+  };
+
+  const handleWordUpdated = (updatedWord: WordDocument) => {
+    setWords(prev => prev.map(w => w.id === updatedWord.id ? updatedWord : w));
+    
+    // 詳細モーダルで編集中の単語も更新しておく
+    if (selectedWord && selectedWord.id === updatedWord.id) {
+        setSelectedWord(updatedWord);
+    }
+  };
+
+  // 強制リロードが必要な場合に使用
+  const handleRefresh = () => {
+      loadWords(true);
+  };
+
   const handleLogout = async () => {
     try {
       await signOut(auth);
       setWords([]); 
       setShowSettings(false); 
-      // ログアウト時は設定をクリアして、次回別ユーザーでログインした際の混入を防ぐ
       localStorage.removeItem('custom_firebase_config'); 
       localStorage.removeItem('gemini_api_key');
-      // リロードして初期状態（デフォルトDB）に戻す
       window.location.reload();
     } catch (error) {
       console.error("Logout error", error);
     }
-  };
-
-  const handleRefresh = () => {
-      loadWords(true);
   };
 
   const handleDelete = async (id: string) => {
@@ -304,9 +324,19 @@ function App() {
         return true;
     })
     .sort((a, b) => {
+        // ソートロジック
         if (sortOrder === 'newest') return b.createdAt.seconds - a.createdAt.seconds;
         if (sortOrder === 'oldest') return a.createdAt.seconds - b.createdAt.seconds;
-        return a.english.localeCompare(b.english);
+        if (sortOrder === 'z-a') return b.english.localeCompare(a.english);
+        if (sortOrder === 'toeic-high') return (b.toeicLevel || 0) - (a.toeicLevel || 0);
+        if (sortOrder === 'toeic-low') return (a.toeicLevel || 0) - (b.toeicLevel || 0);
+        return a.english.localeCompare(b.english); // Default 'a-z'
+    })
+    // 数値範囲（インデックス）によるフィルタリング
+    .filter((_, index) => {
+        const start = filterIndexFrom ? Math.max(0, parseInt(filterIndexFrom) - 1) : 0;
+        const end = filterIndexTo ? parseInt(filterIndexTo) : Infinity;
+        return index >= start && index < end;
     });
 
   if (authLoading || (user && !isConfigVerified)) {
@@ -323,14 +353,15 @@ function App() {
 
   return (
     <div className="min-h-screen pb-20 bg-[#f0f4f8]">
-      <div className="bg-[#f0f4f8]">
+      <div className="sticky top-0 z-50 bg-[#f0f4f8] shadow-sm">
         <Navbar 
             toggleQuizMode={() => setShowQuizModal(true)}
             toggleAddModal={() => setShowAddModal(true)}
             toggleSettings={() => setShowSettings(true)}
+            toggleDailyComment={() => setShowDailyComment(true)} // ★追加
         />
       </div>
-
+ 
       <div className="max-w-7xl mx-auto px-4 pt-4">
         
         {/* Controls Section */}
@@ -371,6 +402,9 @@ function App() {
                             <option value="newest">Newest First</option>
                             <option value="oldest">Oldest First</option>
                             <option value="a-z">A-Z</option>
+                            <option value="z-a">Z-A</option>
+                            <option value="toeic-high">TOEIC High-Low</option>
+                            <option value="toeic-low">TOEIC Low-High</option>
                         </select>
                         <i className="fa-solid fa-chevron-down text-[10px] text-slate-400 absolute right-4 top-1/2 transform -translate-y-1/2 pointer-events-none"></i>
                     </div>
@@ -415,6 +449,46 @@ function App() {
                     options={['400', '600', '730', '860']} 
                 />
 
+                {/* Range (Index) Filter */}
+                <div className="relative group">
+                    <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-full shadow-sm border border-slate-100 group-hover:border-indigo-100 transition-colors">
+                        <i className="fa-solid fa-list-ol text-slate-400 text-xs"></i>
+                        <div className="flex flex-col gap-1">
+                            <span className="text-[9px] font-bold text-slate-400 uppercase leading-none tracking-wider">Range (#)</span>
+                            <div className="flex items-center gap-2">
+                                <input
+                                    type="number"
+                                    min="1"
+                                    placeholder="1"
+                                    value={filterIndexFrom}
+                                    onChange={(e) => setFilterIndexFrom(e.target.value)}
+                                    className="text-xs font-bold text-slate-700 outline-none bg-transparent border-b border-slate-200 focus:border-indigo-400 transition-colors w-12 text-center"
+                                />
+                                <span className="text-slate-300 text-xs">~</span>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    placeholder="All"
+                                    value={filterIndexTo}
+                                    onChange={(e) => setFilterIndexTo(e.target.value)}
+                                    className="text-xs font-bold text-slate-700 outline-none bg-transparent border-b border-slate-200 focus:border-indigo-400 transition-colors w-12 text-center"
+                                />
+                                {(filterIndexFrom || filterIndexTo) && (
+                                    <button
+                                        onClick={() => {
+                                            setFilterIndexFrom('');
+                                            setFilterIndexTo('');
+                                        }}
+                                        className="text-slate-400 hover:text-indigo-500 transition-colors"
+                                    >
+                                        <i className="fa-solid fa-times text-xs"></i>
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 {/* Date Filter */}
                  <div className="relative group">
                     <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-full shadow-sm border border-slate-100 group-hover:border-indigo-100 transition-colors">
@@ -451,7 +525,7 @@ function App() {
                     </div>
                 </div>
 
-                {(filterCategory !== 'All' || filterStatus !== 'All' || filterPos !== 'All' || filterToeic !== 'All' || filterDateFrom || filterDateTo) && (
+                {(filterCategory !== 'All' || filterStatus !== 'All' || filterPos !== 'All' || filterToeic !== 'All' || filterDateFrom || filterDateTo || filterIndexFrom || filterIndexTo) && (
                     <button 
                         onClick={() => {
                             setFilterCategory('All');
@@ -460,6 +534,8 @@ function App() {
                             setFilterToeic('All');
                             setFilterDateFrom('');
                             setFilterDateTo('');
+                            setFilterIndexFrom('');
+                            setFilterIndexTo('');
                         }}
                         className="ml-auto text-xs font-bold text-slate-400 hover:text-indigo-500 px-3 py-1 rounded-full hover:bg-white transition-colors flex items-center gap-1"
                     >
@@ -499,7 +575,7 @@ function App() {
         {!loading && words.length > 0 && processedWords.length === 0 && (
              <div className="text-center py-20 text-slate-400">
                 <div className="neumorph-flat w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-6 text-indigo-200">
-                     <i className="fa-solid fa-filter text-4xl"></i>
+                      <i className="fa-solid fa-filter text-4xl"></i>
                 </div>
                 <h3 className="text-lg font-bold text-slate-600 mb-2">No Matches</h3>
                 <p>Try adjusting your filters or search terms.</p>
@@ -512,7 +588,7 @@ function App() {
       {showAddModal && (
         <AddWordModal 
             onClose={() => setShowAddModal(false)} 
-            onSuccess={handleRefresh} 
+            onSuccess={handleWordAdded} 
         />
       )}
       
@@ -528,7 +604,7 @@ function App() {
           <QuizModal 
             words={words} 
             onClose={() => setShowQuizModal(false)}
-            onUpdate={handleRefresh}
+            onUpdate={handleWordUpdated}
           />
       )}
       
@@ -540,12 +616,20 @@ function App() {
           />
       )}
 
+      {/* ★追加: 日次コメントモーダル */}
+      {showDailyComment && user && (
+          <DailyCommentModal
+            onClose={() => setShowDailyComment(false)}
+            userId={user.uid}
+          />
+      )}
+
       {selectedWord && (
           <WordDetailModal 
             word={selectedWord} 
             onClose={() => setSelectedWord(null)}
             onDelete={handleDelete}
-            onUpdate={handleRefresh}
+            onUpdate={handleWordUpdated}
           />
       )}
     </div>

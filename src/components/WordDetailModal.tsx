@@ -6,11 +6,11 @@ interface WordDetailModalProps {
   word: WordDocument;
   onClose: () => void;
   onDelete: (id: string) => void;
-  onUpdate: () => void;
+  onUpdate: (updatedWord: WordDocument) => void;
 }
 
 export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose, onDelete, onUpdate }) => {
-  // ★修正1: 表示用のデータをローカルステートで管理する
+  // 表示用のデータをローカルステートで管理 (Optimistic UI用)
   const [currentWord, setCurrentWord] = useState<WordDocument>(word);
   
   const [isEditing, setIsEditing] = useState(false);
@@ -21,7 +21,7 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
   });
   const [loading, setLoading] = useState(false);
 
-  // ★修正2: 親から渡されるwordが変わった場合（別の単語をクリックした時など）にステートを同期する
+  // 親から渡されるwordが変わった場合にステートを同期
   useEffect(() => {
     setCurrentWord(word);
     setEditData({ 
@@ -43,10 +43,12 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
         // Commentの更新
         await updateWordComment(currentWord.id, editData.comment);
         
-        // ★修正3: 保存成功時、即座に表示用ステートを更新してUIに反映させる
+        // 保存成功時、即座に表示用ステートを更新
         setCurrentWord(editData);
         
-        onUpdate(); // 親（一覧画面）のデータもバックグラウンドで更新
+        // 親コンポーネントに更新後の完全なデータを渡す
+        onUpdate(editData); 
+        
         setIsEditing(false);
     } catch (e) {
         console.error("Failed to update", e);
@@ -81,8 +83,6 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
     newExamples.splice(index, 1);
     setEditData(prev => ({ ...prev, examples: newExamples }));
   };
-
-  // 以下のレンダリング部分では、基本的に `word` ではなく `currentWord` を使用します
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/30 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
@@ -247,7 +247,7 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
             {/* Examples Section */}
             {(currentWord.examples && currentWord.examples.length > 0) || isEditing ? (
                 <div>
-                     <div className="flex justify-between items-center mb-3 px-2">
+                      <div className="flex justify-between items-center mb-3 px-2">
                         <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Examples</h3>
                         {isEditing && (
                             <button 
@@ -257,9 +257,9 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
                                 <i className="fa-solid fa-plus mr-1"></i> Add
                             </button>
                         )}
-                     </div>
-                     
-                     <div className="space-y-3">
+                      </div>
+                      
+                      <div className="space-y-3">
                         {isEditing ? (
                             (editData.examples || []).map((ex, index) => (
                                 <div key={index} className="border border-indigo-200 rounded p-3 bg-white relative group">
@@ -304,7 +304,7 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
                                 No examples yet. Click "Add" to create one.
                             </p>
                         )}
-                     </div>
+                      </div>
                 </div>
             ) : null}
 

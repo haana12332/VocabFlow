@@ -1,20 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { QuizMode, WordDocument, ChatMessage } from '../types';
+import { QuizMode, WordDocument, ChatMessage, WordStatus } from '../types';
 import { createQuizChat } from '../services/geminiService';
 import { updateWordStatus } from '../firebase';
 
 interface QuizModalProps {
     words: WordDocument[];
     onClose: () => void;
-    onUpdate?: () => void; // Callback to refresh data
+    // 親コンポーネント(App.tsx)のhandleWordUpdatedに合わせる
+    onUpdate?: (updatedWord: WordDocument) => void; 
 }
 
 interface QuizConfig {
     numQuestions: number;
-    toeicLevel: string; // 'All' or specific levels
+    toeicLevel: string;
     partOfSpeech: string;
     category: string;
-    status: string; // 'All', 'Beginner', 'Training', 'Mastered'
+    status: string;
 }
 
 export const QuizModal: React.FC<QuizModalProps> = ({ words, onClose, onUpdate }) => {
@@ -43,12 +44,12 @@ export const QuizModal: React.FC<QuizModalProps> = ({ words, onClose, onUpdate }
     // Standard Quiz State
     const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
     const [showAnswer, setShowAnswer] = useState(false);
-    const [userAnswers, setUserAnswers] = useState<{ [key: number]: string }>({}); // ユーザーの回答を保存
-    const [upgradingStatus, setUpgradingStatus] = useState<{ [key: string]: boolean }>({}); // アップグレード中の状態
+    const [userAnswers, setUserAnswers] = useState<{ [key: number]: string }>({});
+    const [upgradingStatus, setUpgradingStatus] = useState<{ [key: string]: boolean }>({});
 
     // Helpers for Select Options
-    const categories = Array.from(new Set(words.map(w => w.category)));
-    const partsOfSpeech = Array.from(new Set(words.flatMap(w => w.partOfSpeech)));
+    const categories = Array.from(new Set(words.map(w => w.category))).sort();
+    const partsOfSpeech = Array.from(new Set(words.flatMap(w => w.partOfSpeech))).sort();
     
     const startQuiz = (selectedMode: QuizMode) => {
         // Filter Words
@@ -58,7 +59,7 @@ export const QuizModal: React.FC<QuizModalProps> = ({ words, onClose, onUpdate }
             if (config.partOfSpeech !== 'All' && !w.partOfSpeech.includes(config.partOfSpeech)) return false;
             if (config.toeicLevel !== 'All') {
                  const level = parseInt(config.toeicLevel);
-                 if (w.toeicLevel < level) return false;
+                 if ((w.toeicLevel || 0) < level) return false;
             }
             return true;
         });
@@ -75,13 +76,19 @@ export const QuizModal: React.FC<QuizModalProps> = ({ words, onClose, onUpdate }
         setMode(selectedMode);
 
         if (selectedMode === QuizMode.AI_CHAT) {
-            const chat = createQuizChat(filtered);
-            setChatSession(chat);
-            // Instead of auto-starting, we ask the user what they want
-            setMessages([{ 
-                role: 'model', 
-                text: "Hello! I am ready to quiz you. What kind of quiz would you like? (e.g., 'TOEIC 800 grammar' or 'Vocabulary check')" 
-            }]);
+            // ★修正: createQuizChat は同期的のため、.then() ではなく try-catch で処理
+            try {
+                const chat = createQuizChat(filtered);
+                setChatSession(chat);
+                setMessages([{ 
+                    role: 'model', 
+                    text: "Hello! I am ready to quiz you. What kind of quiz would you like? (e.g., 'TOEIC 800 grammar' or 'Vocabulary check')" 
+                }]);
+            } catch (e: any) { // ★修正: e に型注釈を追加
+                console.error("Failed to start chat", e);
+                alert("Failed to connect to AI service. Please check your API key.");
+                setMode(QuizMode.CONFIG);
+            }
         }
     };
 
@@ -94,7 +101,24 @@ export const QuizModal: React.FC<QuizModalProps> = ({ words, onClose, onUpdate }
         scrollToBottom();
     }, [messages]);
 
-    // 修正: ストリーミング対応版 handleSendMessage
+    // ★共通ヘルパー関数: ステータス更新と親コンポーネントへの通知を行う
+    const updateStatusAndNotify = async (word: WordDocument, newStatus: WordStatus) => {
+        try {
+            await updateWordStatus(word.id, newStatus);
+            
+            // ローカルのクイズ用リストを更新
+            setFilteredWords(prev => prev.map(w => w.id === word.id ? { ...w, status: newStatus } : w));
+            
+            // ★重要: 更新後のオブジェクトを作成して親(App.tsx)に渡す
+            if (onUpdate) {
+                onUpdate({ ...word, status: newStatus });
+            }
+        } catch (e) {
+            console.error("Status update failed", e);
+            throw e;
+        }
+    };
+
     const handleSendMessage = async () => {
         if (!input.trim() || !chatSession) return;
         
@@ -102,25 +126,20 @@ export const QuizModal: React.FC<QuizModalProps> = ({ words, onClose, onUpdate }
         setMessages(prev => [...prev, { role: 'user', text: userMsg }]);
         setInput('');
         setLoading(true);
-        setCorrectWordId(null); // Reset detection
+        setCorrectWordId(null);
 
         try {
-            // AI応答用のプレースホルダーを追加
             setMessages(prev => [...prev, { role: 'model', text: "" }]);
 
-            // ストリーミング送信
             const result = await chatSession.sendMessageStream(userMsg);
             
             let fullText = "";
-            
-            // ストリームチャンクをループ処理
             for await (const chunk of result.stream) {
                 const chunkText = chunk.text();
                 fullText += chunkText;
 
                 setMessages(prev => {
                     const newMessages = [...prev];
-                    // 最後のメッセージ（モデルの応答）を更新
                     newMessages[newMessages.length - 1] = {
                         role: 'model',
                         text: fullText
@@ -129,10 +148,8 @@ export const QuizModal: React.FC<QuizModalProps> = ({ words, onClose, onUpdate }
                 });
             }
 
-            // --- 完了後の判定ロジック ---
+            // --- 判定ロジック ---
             let isCorrect = false;
-            
-            // Match for word in brackets [word]
             const match = fullText.match(/\[(.*?)\]/);
             const foundWord = match && match[1] 
                 ? words.find(w => w.english.toLowerCase() === match[1].toLowerCase()) 
@@ -142,16 +159,14 @@ export const QuizModal: React.FC<QuizModalProps> = ({ words, onClose, onUpdate }
                 isCorrect = true;
                 if (foundWord) setCorrectWordId(foundWord.id);
             } else if (fullText.includes('【不正解】')) {
-                // Logic: If user mistakes a Mastered word, downgrade it to Training
                 if (foundWord && foundWord.status === 'Mastered') {
-                    await updateWordStatus(foundWord.id, 'Training');
+                    // 自動ダウングレード処理
+                    await updateStatusAndNotify(foundWord, 'Training');
                     setToastMsg(`Oops! '${foundWord.english}' downgraded to Training.`);
                     setTimeout(() => setToastMsg(null), 3000);
-                    if (onUpdate) onUpdate();
                 }
             }
 
-            // 最終的な状態を更新（isCorrectフラグを追加）
             setMessages(prev => {
                 const newMessages = [...prev];
                 newMessages[newMessages.length - 1] = {
@@ -171,74 +186,32 @@ export const QuizModal: React.FC<QuizModalProps> = ({ words, onClose, onUpdate }
     };
 
     const handleMasteryUpgrade = async (wordId: string) => {
+        const word = words.find(w => w.id === wordId);
+        if (!word) return;
+
         setUpgrading(true);
         try {
-            await updateWordStatus(wordId, 'Mastered');
-            if (onUpdate) {
-                onUpdate(); // Trigger refresh in App.tsx
-            }
+            await updateStatusAndNotify(word, 'Mastered');
             alert("Success! Word status updated to Mastered.");
             setCorrectWordId(null);
         } catch (e) {
-            console.error("Update failed", e);
-            alert("Failed to update status. Please try again.");
+            alert("Failed to update status.");
         } finally {
             setUpgrading(false);
         }
     };
 
-    const handleStatusUpgrade = async (wordId: string) => {
-        setUpgradingStatus(prev => ({ ...prev, [wordId]: true }));
-        try {
-            await updateWordStatus(wordId, 'Training');
-            // ローカル状態も更新
-            setFilteredWords(prev => prev.map(w => w.id === wordId ? { ...w, status: 'Training' } : w));
-            if (onUpdate) {
-                onUpdate();
-            }
-            setToastMsg("Success! Word status updated to Training.");
-            setTimeout(() => setToastMsg(null), 3000);
-        } catch (e) {
-            console.error("Update failed", e);
-            alert("Failed to update status. Please try again.");
-        } finally {
-            setUpgradingStatus(prev => ({ ...prev, [wordId]: false }));
-        }
-    };
+    const handleStatusChange = async (wordId: string, newStatus: WordStatus) => {
+        const word = words.find(w => w.id === wordId);
+        if (!word) return;
 
-    const handleStatusDowngrade = async (wordId: string) => {
         setUpgradingStatus(prev => ({ ...prev, [wordId]: true }));
         try {
-            await updateWordStatus(wordId, 'Beginner');
-            // ローカル状態も更新
-            setFilteredWords(prev => prev.map(w => w.id === wordId ? { ...w, status: 'Beginner' } : w));
-            if (onUpdate) {
-                onUpdate();
-            }
-            setToastMsg("Word status updated to Beginner.");
+            await updateStatusAndNotify(word, newStatus);
+            setToastMsg(`Word status updated to ${newStatus}.`);
             setTimeout(() => setToastMsg(null), 3000);
         } catch (e) {
-            console.error("Update failed", e);
-            alert("Failed to update status. Please try again.");
-        } finally {
-            setUpgradingStatus(prev => ({ ...prev, [wordId]: false }));
-        }
-    };
-
-    const handleMasteredDowngrade = async (wordId: string) => {
-        setUpgradingStatus(prev => ({ ...prev, [wordId]: true }));
-        try {
-            await updateWordStatus(wordId, 'Training');
-            // ローカル状態も更新
-            setFilteredWords(prev => prev.map(w => w.id === wordId ? { ...w, status: 'Training' } : w));
-            if (onUpdate) {
-                onUpdate();
-            }
-            setToastMsg("Word status updated to Training.");
-            setTimeout(() => setToastMsg(null), 3000);
-        } catch (e) {
-            console.error("Update failed", e);
-            alert("Failed to update status. Please try again.");
+            alert("Failed to update status.");
         } finally {
             setUpgradingStatus(prev => ({ ...prev, [wordId]: false }));
         }
@@ -347,7 +320,6 @@ export const QuizModal: React.FC<QuizModalProps> = ({ words, onClose, onUpdate }
     if (mode === QuizMode.STANDARD) {
         const currentWord = filteredWords[currentQuestionIndex];
         const currentAnswer = userAnswers[currentQuestionIndex] || '';
-        const isCorrect = currentAnswer.trim().toLowerCase() === currentWord.meaning.toLowerCase();
         
         return (
             <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
@@ -417,65 +389,40 @@ export const QuizModal: React.FC<QuizModalProps> = ({ words, onClose, onUpdate }
                                 </div>
 
                                 {/* 習熟度変更ボタン */}
-                                {currentWord.status === 'Beginner' && (
-                                    <button 
-                                        onClick={() => handleStatusUpgrade(currentWord.id)}
-                                        disabled={upgradingStatus[currentWord.id]}
-                                        className="w-full neumorph-btn px-6 py-3 rounded-xl text-indigo-600 font-bold hover:bg-indigo-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                                    >
-                                        {upgradingStatus[currentWord.id] ? (
-                                            <>
-                                                <i className="fa-solid fa-circle-notch fa-spin"></i>
-                                                <span>Upgrading...</span>
-                                            </>
-                                        ) : (
-                                            <>
-                                                <i className="fa-solid fa-arrow-up"></i>
-                                                <span>Upgrade to Training</span>
-                                            </>
-                                        )}
-                                    </button>
-                                )}
+                                <div className="flex flex-col gap-2">
+                                    {currentWord.status === 'Beginner' && (
+                                        <button 
+                                            onClick={() => handleStatusChange(currentWord.id, 'Training')}
+                                            disabled={upgradingStatus[currentWord.id]}
+                                            className="w-full neumorph-btn px-6 py-3 rounded-xl text-indigo-600 font-bold hover:bg-indigo-50 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                                        >
+                                            {upgradingStatus[currentWord.id] ? <i className="fa-solid fa-circle-notch fa-spin"></i> : <i className="fa-solid fa-arrow-up"></i>}
+                                            <span>Upgrade to Training</span>
+                                        </button>
+                                    )}
 
-                                {currentWord.status === 'Training' && (
-                                    <button 
-                                        onClick={() => handleStatusDowngrade(currentWord.id)}
-                                        disabled={upgradingStatus[currentWord.id]}
-                                        className="w-full neumorph-btn px-6 py-3 rounded-xl text-slate-600 font-bold hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                                    >
-                                        {upgradingStatus[currentWord.id] ? (
-                                            <>
-                                                <i className="fa-solid fa-circle-notch fa-spin"></i>
-                                                <span>Downgrading...</span>
-                                            </>
-                                        ) : (
-                                            <>
-                                                <i className="fa-solid fa-arrow-down"></i>
-                                                <span>Downgrade to Beginner</span>
-                                            </>
-                                        )}
-                                    </button>
-                                )}
+                                    {currentWord.status === 'Training' && (
+                                        <button 
+                                            onClick={() => handleStatusChange(currentWord.id, 'Beginner')}
+                                            disabled={upgradingStatus[currentWord.id]}
+                                            className="w-full neumorph-btn px-6 py-3 rounded-xl text-slate-600 font-bold hover:bg-slate-50 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                                        >
+                                            {upgradingStatus[currentWord.id] ? <i className="fa-solid fa-circle-notch fa-spin"></i> : <i className="fa-solid fa-arrow-down"></i>}
+                                            <span>Downgrade to Beginner</span>
+                                        </button>
+                                    )}
 
-                                {currentWord.status === 'Mastered' && (
-                                    <button 
-                                        onClick={() => handleMasteredDowngrade(currentWord.id)}
-                                        disabled={upgradingStatus[currentWord.id]}
-                                        className="w-full neumorph-btn px-6 py-3 rounded-xl text-slate-600 font-bold hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                                    >
-                                        {upgradingStatus[currentWord.id] ? (
-                                            <>
-                                                <i className="fa-solid fa-circle-notch fa-spin"></i>
-                                                <span>Downgrading...</span>
-                                            </>
-                                        ) : (
-                                            <>
-                                                <i className="fa-solid fa-arrow-down"></i>
-                                                <span>Downgrade to Training</span>
-                                            </>
-                                        )}
-                                    </button>
-                                )}
+                                    {currentWord.status === 'Mastered' && (
+                                        <button 
+                                            onClick={() => handleStatusChange(currentWord.id, 'Training')}
+                                            disabled={upgradingStatus[currentWord.id]}
+                                            className="w-full neumorph-btn px-6 py-3 rounded-xl text-slate-600 font-bold hover:bg-slate-50 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                                        >
+                                            {upgradingStatus[currentWord.id] ? <i className="fa-solid fa-circle-notch fa-spin"></i> : <i className="fa-solid fa-arrow-down"></i>}
+                                            <span>Downgrade to Training</span>
+                                        </button>
+                                    )}
+                                </div>
                             </div>
                         )}
                     </div>
@@ -573,7 +520,7 @@ export const QuizModal: React.FC<QuizModalProps> = ({ words, onClose, onUpdate }
                                  <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce delay-100"></div>
                                  <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce delay-200"></div>
                              </div>
-                         </div>
+                          </div>
                     )}
                 </div>
 

@@ -1,21 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { WordDocument } from '../types';
-import { generateWordInfo, generateBulkWordInfo } from '../services/geminiService';
+import { generateBulkWordInfo } from '../services/geminiService';
 import { addWordToFirestore } from '../firebase';
 
 interface AddWordModalProps {
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (newWord: WordDocument) => void;
 }
 
 export const AddWordModal: React.FC<AddWordModalProps> = ({ onClose, onSuccess }) => {
-  const [mode, setMode] = useState<'manual' | 'ai' | 'bulk'>('ai');
+  const [mode, setMode] = useState<'ai' | 'manual'>('ai');
   const [loading, setLoading] = useState(false);
   
-  // AI Single
-  const [inputWord, setInputWord] = useState('');
-
-  // AI Bulk
+  // AI Input State
   const [bulkInput, setBulkInput] = useState('');
   const [progress, setProgress] = useState(0);
 
@@ -34,52 +31,51 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({ onClose, onSuccess }
   // Auto-detect Idiom for Manual Entry
   useEffect(() => {
     if (manualData.english && manualData.english.trim().includes(' ')) {
-        // If it has spaces and POS is empty or doesn't have Idiom, suggest/set it
         if (Array.isArray(manualData.partOfSpeech) && !manualData.partOfSpeech.includes('Idiom')) {
              setManualData(prev => ({ ...prev, partOfSpeech: ['Idiom'] }));
         }
     }
   }, [manualData.english]);
 
+  // AI Submit Handler
   const handleAiSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inputWord.trim()) return;
-
-    setLoading(true);
-    try {
-      const generatedData = await generateWordInfo(inputWord);
-      await addWordToFirestore(generatedData as WordDocument);
-      onSuccess();
-      onClose();
-    } catch (error) {
-      alert("Error generating or saving word. Please try again.");
-      console.error(error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleBulkSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!bulkInput.trim()) return;
 
     setLoading(true);
     setProgress(10);
     try {
-        const words = await generateBulkWordInfo(bulkInput);
+        const wordsData = await generateBulkWordInfo(bulkInput);
         setProgress(50);
         
         let completed = 0;
-        await Promise.all(words.map(async (word) => {
-            await addWordToFirestore(word as WordDocument);
+        
+        // 生成された各単語を保存し、リストに追加する
+        // Promise.allで並列処理しつつ、個別にonSuccessを呼ぶ
+        await Promise.all(wordsData.map(async (data) => {
+            // Firestoreに保存しIDを取得
+            const docId = await addWordToFirestore(data as WordDocument);
+            
+            // 完全なオブジェクトを作成
+            const newWord: WordDocument = {
+                ...(data as WordDocument),
+                id: docId,
+                createdAt: { seconds: Math.floor(Date.now() / 1000), nanoseconds: 0 } as any
+            };
+
+            // 親コンポーネントのリストに追加 (Optimistic UI)
+            // これによりリロードせずに画面に反映されます
+            onSuccess(newWord);
+
             completed++;
-            setProgress(50 + (completed / words.length) * 50);
+            setProgress(50 + (completed / wordsData.length) * 50);
         }));
 
-        onSuccess();
         onClose();
+        // window.location.reload(); // ★削除: これがソートリセットの原因でした
+
     } catch (error) {
-        alert("Error processing bulk words. Please try again with fewer words.");
+        alert("Error processing words. Please try again.");
         console.error(error);
     } finally {
         setLoading(false);
@@ -99,7 +95,6 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({ onClose, onSuccess }
           });
       }
 
-      // Check for idiom one last time
       let pos = typeof manualData.partOfSpeech === 'string' ? [manualData.partOfSpeech] : manualData.partOfSpeech || [];
       if (manualData.english?.trim().includes(' ') && !pos.includes('Idiom')) {
           pos = ['Idiom'];
@@ -118,8 +113,15 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({ onClose, onSuccess }
           examples: examples
       };
       
-      await addWordToFirestore(wordToSave);
-      onSuccess();
+      const newDocId = await addWordToFirestore(wordToSave);
+
+      const newWord: WordDocument = {
+          ...wordToSave,
+          id: newDocId,
+          createdAt: { seconds: Math.floor(Date.now() / 1000), nanoseconds: 0 } as any
+      };
+
+      onSuccess(newWord);
       onClose();
     } catch (error) {
       console.error(error);
@@ -144,13 +146,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({ onClose, onSuccess }
                 onClick={() => setMode('ai')}
                 className={`flex-1 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all ${mode === 'ai' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500'}`}
             >
-                AI Single
-            </button>
-            <button 
-                onClick={() => setMode('bulk')}
-                className={`flex-1 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all ${mode === 'bulk' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500'}`}
-            >
-                AI Bulk
+                AI
             </button>
             <button 
                 onClick={() => setMode('manual')}
@@ -161,32 +157,9 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({ onClose, onSuccess }
         </div>
 
         {mode === 'ai' && (
-            <form onSubmit={handleAiSubmit} className="space-y-4">
+             <form onSubmit={handleAiSubmit} className="space-y-4">
                 <div>
-                    <label className="block text-sm font-bold text-slate-600 mb-2">English Word or Phrase</label>
-                    <input 
-                        type="text" 
-                        value={inputWord}
-                        onChange={(e) => setInputWord(e.target.value)}
-                        className="w-full neumorph-pressed rounded-xl p-4 text-lg outline-none text-slate-700 bg-transparent focus:ring-2 focus:ring-indigo-200"
-                        placeholder="e.g. Serendipity"
-                        autoFocus
-                    />
-                </div>
-                <button 
-                    type="submit" 
-                    disabled={loading}
-                    className="w-full neumorph-btn py-4 rounded-xl text-indigo-600 font-bold flex items-center justify-center gap-2 hover:scale-[1.01]"
-                >
-                    {loading ? <i className="fa-solid fa-circle-notch fa-spin"></i> : <><i className="fa-solid fa-wand-magic-sparkles"></i> Generate</>}
-                </button>
-            </form>
-        )}
-
-        {mode === 'bulk' && (
-             <form onSubmit={handleBulkSubmit} className="space-y-4">
-                <div>
-                    <label className="block text-sm font-bold text-slate-600 mb-2">Bulk Words (comma separated)</label>
+                    <label className="block text-sm font-bold text-slate-600 mb-2">Words (comma separated)</label>
                     <textarea 
                         rows={4}
                         value={bulkInput}
@@ -195,7 +168,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({ onClose, onSuccess }
                         placeholder="Apple, Banana, Beach, Take off"
                         autoFocus
                     />
-                    <p className="text-xs text-slate-400 mt-2 text-right">Separate words with commas.</p>
+                    <p className="text-xs text-slate-400 mt-2 text-right">Separate words with commas to add multiple.</p>
                 </div>
                 
                 {loading && (
@@ -209,7 +182,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({ onClose, onSuccess }
                     disabled={loading}
                     className="w-full neumorph-btn py-4 rounded-xl text-indigo-600 font-bold flex items-center justify-center gap-2 hover:scale-[1.01]"
                 >
-                    {loading ? <i className="fa-solid fa-circle-notch fa-spin"></i> : <><i className="fa-solid fa-layer-group"></i> Bulk Generate</>}
+                    {loading ? <i className="fa-solid fa-circle-notch fa-spin"></i> : <><i className="fa-solid fa-wand-magic-sparkles"></i> AI Generate</>}
                 </button>
             </form>
         )}

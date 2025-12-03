@@ -19,11 +19,10 @@ import {
   where
 } from "firebase/firestore";
 import { getAuth, User, signInAnonymously } from "firebase/auth";
-import { WordDocument, UserProfile } from "./types";
+import { WordDocument, UserProfile, DailyComment } from "./types";
 
 // --- 1. 設定の取得と初期化ロジック ---
 
-// デフォルトの設定（環境変数から - Auth & ユーザー設定用）
 const defaultFirebaseConfig: FirebaseOptions = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
@@ -33,7 +32,6 @@ const defaultFirebaseConfig: FirebaseOptions = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
-// 有効な設定を取得する関数（ローカルストレージ優先）
 const getEffectiveConfig = (): FirebaseOptions => {
   try {
     const customConfigStr = localStorage.getItem('custom_firebase_config');
@@ -46,7 +44,6 @@ const getEffectiveConfig = (): FirebaseOptions => {
   return defaultFirebaseConfig;
 };
 
-// アプリの初期化（二重初期化防止）
 const initApp = (): FirebaseApp => {
   const config = getEffectiveConfig();
   if (!getApps().length) {
@@ -60,8 +57,7 @@ const authApp = getApps().find(app => app.name === "[DEFAULT]") || initializeApp
 export const auth = getAuth(authApp);
 const userDb = getFirestore(authApp); 
 
-
-// B. データ用設定（単語データ保存用）
+// --- データ用アプリの初期化（カスタム設定対応） ---
 const getCustomConfig = (): FirebaseOptions | null => {
   try {
     const customConfigStr = localStorage.getItem('custom_firebase_config');
@@ -78,36 +74,28 @@ let dataApp: FirebaseApp;
 const customConfig = getCustomConfig();
 
 if (customConfig) {
-    // カスタム設定がある場合、名前付きアプリ "dataApp" として初期化
     dataApp = getApps().find(app => app.name === "dataApp") || initializeApp(customConfig, "dataApp");
-    console.log("Using Custom Firebase Project for Data");
-
-    // カスタム側のアプリにも匿名ログインして、Firestoreのアクセス権(request.auth)を確保する
     const dataAuth = getAuth(dataApp);
     signInAnonymously(dataAuth).catch((err) => {
-        console.warn("Failed to sign in anonymously to custom data app. Firestore might be blocked.", err);
+        console.warn("Failed to sign in anonymously to custom data app", err);
     });
-
 } else {
-    // カスタム設定がない場合、Authと同じデフォルトアプリを使用
     dataApp = authApp;
-    console.log("Using Default Firebase Project for Data");
 }
 
+// カスタム設定がある場合はそのDB、なければデフォルトDB
 export const db = getFirestore(dataApp);
 
 const WORDS_COLLECTION = "words";
 const USERS_COLLECTION = "users";
+const DAILY_COMMENTS_COLLECTION = "Comments"; // ルートコレクション名
 const PAGE_SIZE = 12;
 
-
 // --- 2. 設定検証・保存用関数 ---
-
 export const validateAndSaveConfig = async (configInput: string): Promise<FirebaseOptions> => {
   try {
     let configObject: any;
 
-    // 1. 入力がJavaScriptコード形式 ("const firebaseConfig = { ... }") の場合、オブジェクト部分を抽出
     const braceStart = configInput.indexOf('{');
     const braceEnd = configInput.lastIndexOf('}');
     
@@ -116,13 +104,10 @@ export const validateAndSaveConfig = async (configInput: string): Promise<Fireba
       objectString = configInput.substring(braceStart, braceEnd + 1);
     }
 
-    // 2. JavaScriptオブジェクトとして解析
     try {
       const parseFn = new Function(`return ${objectString};`);
       configObject = parseFn();
     } catch (syntaxError) {
-      console.warn("JS evaluation failed, falling back to JSON cleaning strategy", syntaxError);
-      
       let jsonString = objectString
         .replace(/\/\/.*$/gm, '') 
         .replace(/\/\*[\s\S]*?\*\//g, '')
@@ -132,13 +117,9 @@ export const validateAndSaveConfig = async (configInput: string): Promise<Fireba
       configObject = JSON.parse(jsonString);
     }
 
-    if (!configObject) {
-        throw new Error("Failed to parse configuration object.");
-    }
+    if (!configObject) throw new Error("Failed to parse configuration object.");
 
     const parsedConfig = configObject as FirebaseOptions;
-
-    // 3. 必須フィールドのチェック
     const requiredFields = ['apiKey', 'authDomain', 'projectId'];
     for (const field of requiredFields) {
       // @ts-ignore
@@ -147,7 +128,6 @@ export const validateAndSaveConfig = async (configInput: string): Promise<Fireba
       }
     }
 
-    // 4. テスト用のFirebaseアプリを初期化して接続確認
     const tempAppName = "validator_" + Date.now();
     const tempApp = initializeApp(parsedConfig, tempAppName);
     
@@ -157,7 +137,6 @@ export const validateAndSaveConfig = async (configInput: string): Promise<Fireba
       
       await deleteApp(tempApp);
       
-      // 5. 有効な設定をローカルストレージに保存
       localStorage.setItem('custom_firebase_config', JSON.stringify(parsedConfig));
       
       return parsedConfig;
@@ -172,7 +151,6 @@ export const validateAndSaveConfig = async (configInput: string): Promise<Fireba
     throw new Error("Invalid Configuration: " + (error instanceof Error ? error.message : "Unknown error"));
   }
 };
-
 
 // --- 3. User Management Functions ---
 
@@ -213,7 +191,6 @@ export const getUserProfile = async (uid: string) => {
     return null;
 };
 
-
 // --- 4. Word Management Functions ---
 
 export const addWordToFirestore = async (wordData: Omit<WordDocument, 'id' | 'createdAt'>) => {
@@ -223,7 +200,6 @@ export const addWordToFirestore = async (wordData: Omit<WordDocument, 'id' | 'cr
 
     const docRef = await addDoc(collection(db, WORDS_COLLECTION), {
       ...wordData,
-      // userId: currentUser.uid, // ★削除: ユーザーIDは保存しない
       createdAt: Timestamp.now(), 
       comment :''
     });
@@ -263,7 +239,6 @@ export const fetchWords = async (lastVisible: QueryDocumentSnapshot<DocumentData
     const currentUser = auth.currentUser;
     if (!currentUser) return { words: [], lastVisible: null };
 
-    // ★修正: ユーザーIDのフィルタを削除しました
     let constraints: any[] = [
         orderBy("createdAt", "desc"),
         limit(PAGE_SIZE)
@@ -289,9 +264,51 @@ export const fetchWords = async (lastVisible: QueryDocumentSnapshot<DocumentData
     return { words, lastVisible: newLastVisible };
   } catch (error: any) {
     console.error("Error fetching words:", error);
-    if (error.code === 'failed-precondition') {
-        console.warn("Firestore index required. Click the link in the error message above to create it.");
-    }
     return { words: [], lastVisible: null };
   }
+};
+
+// ★変更: ルートの "Comments" コレクションから取得 (userIdはパスには含めないが、シグネチャは維持)
+// DBインスタンスは `db` (custom/dataApp) を使用
+export const getDailyComment = async (userId: string, dateStr: string): Promise<string> => {
+    // doc(db, "Comments", dateStr)
+    const docRef = doc(db, DAILY_COMMENTS_COLLECTION, dateStr);
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+        return docSnap.data().content || '';
+    }
+    return '';
+};
+
+export const getDailyCommentHistory = async (userId: string): Promise<(DailyComment & { id: string })[]> => {
+  try {
+    // collection(db, "Comments")
+    const commentsRef = collection(db, DAILY_COMMENTS_COLLECTION);
+    
+    const q = query(commentsRef, orderBy("date", "desc"));
+    const querySnapshot = await getDocs(q);
+
+    return querySnapshot.docs.map(doc => ({
+      id: doc.id,
+      date: doc.data().date,
+      content: doc.data().content,
+      updatedAt: doc.data().updatedAt,
+      ...doc.data()
+    } as DailyComment & { id: string }));
+  } catch (error) {
+    console.error("Error fetching comment history:", error);
+    return [];
+  }
+};
+
+export const saveDailyComment = async (userId: string, dateStr: string, content: string) => {
+    // doc(db, "Comments", dateStr)
+    // 個別のDB前提のため、日付をドキュメントIDとして使用
+    const docRef = doc(db, DAILY_COMMENTS_COLLECTION, dateStr);
+    await setDoc(docRef, {
+        date: dateStr,
+        content: content,
+        updatedAt: Timestamp.now(),
+        userId: userId // 念のためユーザーIDもフィールドとして保存
+    }, { merge: true });
 };
