@@ -95,7 +95,17 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({ onClose, onSuccess }
           });
       }
 
-      let pos = typeof manualData.partOfSpeech === 'string' ? [manualData.partOfSpeech] : manualData.partOfSpeech || [];
+      // まず配列化する
+      let rawPos = typeof manualData.partOfSpeech === 'string' ? [manualData.partOfSpeech] : manualData.partOfSpeech || [];
+      
+      // 各要素の先頭を大文字に変換 (verb -> Verb)
+      let pos = rawPos.map(p => {
+          const str = p.trim();
+          if (!str) return '';
+          return str.charAt(0).toUpperCase() + str.slice(1);
+      }).filter(p => p !== ''); // 空文字を除去
+
+      // 熟語判定のロジック (既存のコード)
       if (manualData.english?.trim().includes(' ') && !pos.includes('Idiom')) {
           pos = ['Idiom'];
       }

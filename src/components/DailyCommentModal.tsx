@@ -123,7 +123,7 @@ export const DailyCommentModal: React.FC<DailyCommentModalProps> = ({ onClose, u
                             value={comment}
                             onChange={(e) => setComment(e.target.value)}
                             placeholder="Write your thoughts, learning progress, or memo for today..."
-                            className="w-full h-40 neumorph-pressed rounded-xl p-4 text-slate-700 placeholder:text-slate-400 bg-transparent outline-none resize-none transition-all text-base leading-relaxed focus:ring-2 focus:ring-indigo-100"
+                            className="w-full h-40 neumorph-pressed rounded-2xl border-none p-4 text-slate-700 bg-[#f0f4f8] placeholder:text-slate-400 outline-none resize-none transition-all text-base leading-relaxed"
                             autoFocus
                         />
                         
