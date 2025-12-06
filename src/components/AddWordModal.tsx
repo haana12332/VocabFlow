@@ -3,6 +3,12 @@ import { WordDocument } from '../types';
 import { generateBulkWordInfo } from '../services/geminiService';
 import { addWordToFirestore } from '../firebase';
 
+const title = (str: string): string => {
+  if (!str) return '';
+  const trimmed = str.trim();
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase();
+};
+
 interface AddWordModalProps {
   onClose: () => void;
   onSuccess: (newWord: WordDocument) => void;
@@ -38,7 +44,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({ onClose, onSuccess }
   }, [manualData.english]);
 
   // AI Submit Handler
-  const handleAiSubmit = async (e: React.FormEvent) => {
+const handleAiSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!bulkInput.trim()) return;
 
@@ -51,20 +57,33 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({ onClose, onSuccess }
         let completed = 0;
         
         // 生成された各単語を保存し、リストに追加する
-        // Promise.allで並列処理しつつ、個別にonSuccessを呼ぶ
         await Promise.all(wordsData.map(async (data) => {
-            // Firestoreに保存しIDを取得
-            const docId = await addWordToFirestore(data as WordDocument);
             
-            // 完全なオブジェクトを作成
+            // ▼▼▼ 追加箇所: AI生成データの品詞を整形 ▼▼▼
+            let sanitizedPos: string[] = [];
+            if (Array.isArray(data.partOfSpeech)) {
+                sanitizedPos = data.partOfSpeech.map(p => title(p));
+            } else if (typeof data.partOfSpeech === 'string') {
+                sanitizedPos = [title(data.partOfSpeech)];
+            }
+            
+            // 整形済みのデータオブジェクトを作成
+            const sanitizedData = {
+                ...data,
+                partOfSpeech: sanitizedPos
+            };
+
+            // Firestoreに保存 (整形済みデータを使用)
+            const docId = await addWordToFirestore(sanitizedData as WordDocument);
+            
+            // UI更新用のオブジェクト
             const newWord: WordDocument = {
-                ...(data as WordDocument),
+                ...(sanitizedData as WordDocument),
                 id: docId,
                 createdAt: { seconds: Math.floor(Date.now() / 1000), nanoseconds: 0 } as any
             };
 
-            // 親コンポーネントのリストに追加 (Optimistic UI)
-            // これによりリロードせずに画面に反映されます
+            // 親コンポーネントのリストに追加
             onSuccess(newWord);
 
             completed++;
@@ -72,7 +91,6 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({ onClose, onSuccess }
         }));
 
         onClose();
-        // window.location.reload(); // ★削除: これがソートリセットの原因でした
 
     } catch (error) {
         alert("Error processing words. Please try again.");
@@ -82,8 +100,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({ onClose, onSuccess }
         setProgress(0);
     }
   };
-
-  const handleManualSubmit = async (e: React.FormEvent) => {
+const handleManualSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     try {
@@ -95,17 +112,17 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({ onClose, onSuccess }
           });
       }
 
-      // まず配列化する
-      let rawPos = typeof manualData.partOfSpeech === 'string' ? [manualData.partOfSpeech] : manualData.partOfSpeech || [];
+      // 1. 文字列なら配列化
+      let rawPos = typeof manualData.partOfSpeech === 'string' 
+        ? [manualData.partOfSpeech] 
+        : manualData.partOfSpeech || [];
       
-      // 各要素の先頭を大文字に変換 (verb -> Verb)
-      let pos = rawPos.map(p => {
-          const str = p.trim();
-          if (!str) return '';
-          return str.charAt(0).toUpperCase() + str.slice(1);
-      }).filter(p => p !== ''); // 空文字を除去
+      // 2. title()関数を使って整形 (Verb, Noun...)
+      let pos = rawPos
+        .map(p => title(p))  // ここで変換
+        .filter(p => p !== '');
 
-      // 熟語判定のロジック (既存のコード)
+      // 3. 熟語判定
       if (manualData.english?.trim().includes(' ') && !pos.includes('Idiom')) {
           pos = ['Idiom'];
       }
@@ -119,7 +136,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({ onClose, onSuccess }
           status: 'Beginner',
           createdAt: new Date(),
           pronunciationURL: `https://www.google.com/search?q=${manualData.english}+pronunciation`,
-          partOfSpeech: pos,
+          partOfSpeech: pos, 
           examples: examples
       };
       
