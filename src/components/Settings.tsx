@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { updateUserProfile } from '../firebase';
+
 interface SettingsModalProps {
   onClose: () => void;
   onLogout: () => void;
@@ -10,6 +11,9 @@ export const Settings: React.FC<SettingsModalProps> = ({ onClose, onLogout, user
   // Local State for settings
   const [language, setLanguage] = useState('en');
   const [geminiKey, setGeminiKey] = useState('');
+  // ▼ 追加: モデル選択用のState (デフォルトはFlash)
+  const [geminiModel, setGeminiModel] = useState('gemini-2.5-flash-lite');
+  
   const [firebaseConfig, setFirebaseConfig] = useState('');
   const [showFirebaseConfig, setShowFirebaseConfig] = useState(false);
   
@@ -17,10 +21,14 @@ export const Settings: React.FC<SettingsModalProps> = ({ onClose, onLogout, user
   useEffect(() => {
     const savedLang = localStorage.getItem('app_language') || 'en';
     const savedGemini = localStorage.getItem('gemini_api_key') || '';
+    // ▼ 追加: 保存されたモデルを読み込む
+    const savedModel = localStorage.getItem('gemini_model') || 'gemini-2.5-flash';
+    
     const savedFirebase = localStorage.getItem('custom_firebase_config') || '';
     
     setLanguage(savedLang);
     setGeminiKey(savedGemini);
+    setGeminiModel(savedModel); // Stateにセット
     setFirebaseConfig(savedFirebase);
   }, []);
 
@@ -34,6 +42,9 @@ export const Settings: React.FC<SettingsModalProps> = ({ onClose, onLogout, user
         // 1. LocalStorageに保存 (即時反映のため)
         localStorage.setItem('app_language', language);
         localStorage.setItem('gemini_api_key', geminiKey);
+        // ▼ 追加: 選択されたモデルを保存
+        localStorage.setItem('gemini_model', geminiModel);
+        
         localStorage.setItem('custom_firebase_config', firebaseConfig);
 
         // 2. Firestoreデータベースに保存 (永続化のため)
@@ -41,6 +52,7 @@ export const Settings: React.FC<SettingsModalProps> = ({ onClose, onLogout, user
             settings: {
                 language: language,
                 geminiKey: geminiKey,
+                geminiModel: geminiModel, // ▼ DBにも保存
                 // firebaseConfig: firebaseConfig // 必要ならコメントアウトを外して保存
             }
         });
@@ -99,19 +111,43 @@ export const Settings: React.FC<SettingsModalProps> = ({ onClose, onLogout, user
           {/* 2. AI Settings (Gemini) */}
           <section>
             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 ml-1">AI Configuration</h3>
-            <div className="neumorph-flat p-6 rounded-2xl">
-              <div className="flex items-center gap-2 mb-2">
-                <i className="fa-solid fa-robot text-indigo-500"></i>
-                <label className="text-sm font-bold text-slate-600">Gemini API Key</label>
+            <div className="neumorph-flat p-6 rounded-2xl flex flex-col gap-4">
+              
+              {/* API Key Input */}
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                    <i className="fa-solid fa-robot text-indigo-500"></i>
+                    <label className="text-sm font-bold text-slate-600">Gemini API Key</label>
+                </div>
+                <p className="text-xs text-slate-400 mb-3">Required for auto-generating word definitions and quizzes.</p>
+                <input 
+                    type="password" 
+                    placeholder="Enter your Gemini API Key"
+                    value={geminiKey}
+                    onChange={(e) => setGeminiKey(e.target.value)}
+                    className="w-full neumorph-pressed rounded-xl py-3 px-4 outline-none text-slate-600 placeholder-slate-400 text-sm"
+                />
               </div>
-              <p className="text-xs text-slate-400 mb-3">Required for auto-generating word definitions and quizzes.</p>
-              <input 
-                type="password" 
-                placeholder="Enter your Gemini API Key"
-                value={geminiKey}
-                onChange={(e) => setGeminiKey(e.target.value)}
-                className="w-full neumorph-pressed rounded-xl py-3 px-4 outline-none text-slate-600 placeholder-slate-400 text-sm"
-              />
+
+              {/* ▼ 追加: Model Selection Dropdown */}
+              <div>
+                <label className="block text-sm font-bold text-slate-600 mb-2">AI Model</label>
+                <div className="relative">
+                    <select 
+                        value={geminiModel}
+                        onChange={(e) => setGeminiModel(e.target.value)}
+                        className="w-full neumorph-pressed rounded-xl py-3 px-4 outline-none text-slate-600 bg-transparent appearance-none cursor-pointer text-sm"
+                    >
+                        <option value="gemini-2.5-flash">gemini-2.5-flash (Recommended)</option>
+                        <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite (Faster/Cheaper)</option>
+                    </select>
+                    <i className="fa-solid fa-chevron-down absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none text-xs"></i>
+                </div>
+                <p className="text-[10px] text-slate-400 mt-2 ml-1">
+                    Select the model version to use for generation.
+                </p>
+              </div>
+
             </div>
           </section>
 

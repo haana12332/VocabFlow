@@ -1,7 +1,9 @@
 import { GoogleGenerativeAI, SchemaType, Schema } from "@google/generative-ai";
 import { WordDocument } from "../types";
 
-const MODEL_NAME = "gemini-2.5-flash";
+// ▼ 変更: 定数を削除し、許可されたモデルのリストを定義
+const ALLOWED_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
+const DEFAULT_MODEL = "gemini-2.5-flash-lite";
 
 // --- ヘルパー関数: 設定とAIクライアントを動的に取得 ---
 const getAIConfig = () => {
@@ -14,6 +16,12 @@ const getAIConfig = () => {
     console.error("エラー: Google AI APIキーが見つかりません。設定画面か.envファイルを確認してください。");
     throw new Error("API Key is missing");
   }
+  // ▼ 追加: モデル設定の取得と検証
+  const storedModel = localStorage.getItem('gemini_model');
+  // 指定されたモデル以外が入っていた場合はデフォルトに戻す（安全策）
+  const modelName = (storedModel && ALLOWED_MODELS.includes(storedModel)) 
+    ? storedModel 
+    : DEFAULT_MODEL;
 
   // 2. 言語設定の取得と変換
   const langCode = localStorage.getItem('app_language') || 'en';
@@ -29,6 +37,7 @@ const getAIConfig = () => {
 
   return {
     ai: new GoogleGenerativeAI(apiKey),
+    modelName,
     targetLang,
     langCode
   };
@@ -90,7 +99,7 @@ const cleanJsonString = (text: string): string => {
 
 export const generateWordInfo = async (englishWord: string): Promise<Partial<WordDocument>> => {
   // 設定を動的に取得
-  const { ai, targetLang } = getAIConfig();
+  const { ai, targetLang,modelName } = getAIConfig();
 
   const prompt = `Generate detailed vocabulary information for the English word/phrase "${englishWord}".
   Return a JSON object.
@@ -105,7 +114,7 @@ export const generateWordInfo = async (englishWord: string): Promise<Partial<Wor
   `;
 
   const model = ai.getGenerativeModel({
-    model: MODEL_NAME,
+    model: modelName,
     generationConfig: {
       responseMimeType: "application/json",
       responseSchema: WORD_SCHEMA,
@@ -131,15 +140,21 @@ export const generateWordInfo = async (englishWord: string): Promise<Partial<Wor
       };
     }
     throw new Error("No content generated");
-  } catch (error) {
+  } catch (error:any) {
     console.error("generateWordInfo Error:", error);
+    const errorMessage = error.message || "Unknown error";
+    if (errorMessage.includes("404") || errorMessage.includes("not found")) {
+        throw new Error(`Model ${modelName} not found or not available. Please check settings.`);
+    } else if (errorMessage.includes("400") || errorMessage.includes("API key")) {
+        throw new Error("Invalid API Key. Please check settings.");
+    }
     throw new Error("Failed to generate word info");
   }
 };
 
 export const generateBulkWordInfo = async (inputString: string): Promise<Partial<WordDocument>[]> => {
   // 設定を動的に取得
-  const { ai, targetLang } = getAIConfig();
+  const { ai, targetLang,modelName } = getAIConfig();
 
   const prompt = `Generate detailed vocabulary information for the following English words: "${inputString}".
     Return a JSON Array of objects.
@@ -154,7 +169,7 @@ export const generateBulkWordInfo = async (inputString: string): Promise<Partial
     `;
 
   const model = ai.getGenerativeModel({
-    model: MODEL_NAME,
+    model: modelName,
     generationConfig: {
       responseMimeType: "application/json",
       // 配列のスキーマ定義
@@ -189,7 +204,7 @@ export const generateBulkWordInfo = async (inputString: string): Promise<Partial
 
 export const createQuizChat = (words: WordDocument[]) => {
   // 設定を動的に取得
-  const { ai, targetLang } = getAIConfig();
+  const { ai, targetLang,modelName } = getAIConfig();
 
   const wordList = words.map(w => `${w.english} (${w.meaning})`).join(", ");
 
@@ -221,7 +236,7 @@ export const createQuizChat = (words: WordDocument[]) => {
   `;
 
   const model = ai.getGenerativeModel({
-    model: MODEL_NAME,
+    model: modelName,
     systemInstruction: systemInstruction,
   });
 

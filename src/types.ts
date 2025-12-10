@@ -11,6 +11,7 @@ export interface UserProfile {
     language?: string;     // 母国語設定
     geminiKey?: string;    // APIキー
     firebaseConfig?: string; // Firebase設定 (必要な場合)
+    geminiModel?: string;   // Geminiモデル
   };
 }
 
