@@ -11,8 +11,8 @@ export const Settings: React.FC<SettingsModalProps> = ({ onClose, onLogout, user
   // Local State for settings
   const [language, setLanguage] = useState('en');
   const [geminiKey, setGeminiKey] = useState('');
-  // ▼ 追加: モデル選択用のState (デフォルトはFlash)
-  const [geminiModel, setGeminiModel] = useState('gemini-2.5-flash-lite');
+  // ▼ 追加: モデル選択用のState (デフォルトはFlash-live)
+  const [geminiModel, setGeminiModel] = useState("gemini-1.5-flash");
   
   const [firebaseConfig, setFirebaseConfig] = useState('');
   const [showFirebaseConfig, setShowFirebaseConfig] = useState(false);
@@ -140,6 +140,8 @@ export const Settings: React.FC<SettingsModalProps> = ({ onClose, onLogout, user
                     >
                         <option value="gemini-2.5-flash">gemini-2.5-flash (Recommended)</option>
                         <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite (Faster/Cheaper)</option>
+                        <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+                        <option value="gemini-1.5-pro">gemini-1.5-pro</option>
                     </select>
                     <i className="fa-solid fa-chevron-down absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none text-xs"></i>
                 </div>

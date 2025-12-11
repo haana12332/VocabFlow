@@ -15,14 +15,13 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
 
   // --- 自動再生用のState ---
   const [isPlaying, setIsPlaying] = useState(false);
-  const [intervalTime, setIntervalTime] = useState(0.8); // デフォルト0.8秒 (0.5~1.0の間)
+  const [intervalTime, setIntervalTime] = useState(0.8);
   
-  // 非同期処理の中断制御用Ref
   const isPlayingRef = useRef(false);
-  
+  const voicesRef = useRef<SpeechSynthesisVoice[]>([]);
+
   const currentWord = words[currentIndex];
 
-  // stateとrefを同期（useEffect内から最新のisPlayingを参照するため）
   useEffect(() => {
     isPlayingRef.current = isPlaying;
     if (!isPlaying) {
@@ -30,72 +29,92 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
     }
   }, [isPlaying]);
 
+  // 音声リスト読み込み
+  useEffect(() => {
+    const loadVoices = () => {
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length > 0) {
+        voicesRef.current = voices;
+      }
+    };
+    loadVoices();
+    if (window.speechSynthesis.onvoiceschanged !== undefined) {
+      window.speechSynthesis.onvoiceschanged = loadVoices;
+    }
+  }, []);
+
   // --- 音声再生用ヘルパー ---
   const speak = useCallback((text: string, lang: 'en-US' | 'ja-JP') => {
     return new Promise<void>((resolve) => {
-      // 既に再生中ならキャンセル
       window.speechSynthesis.cancel();
 
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = lang;
-      utterance.rate = 1.0; 
+      utterance.rate = 1.0;
+
+      if (voicesRef.current.length > 0) {
+        let targetVoice;
+        if (lang === 'en-US') {
+          targetVoice = voicesRef.current.find(v => v.name === 'Google US English') 
+                      || voicesRef.current.find(v => v.name === 'Samantha')
+                      || voicesRef.current.find(v => v.lang === 'en-US')
+                      || voicesRef.current.find(v => v.lang.startsWith('en'));
+        } else {
+          targetVoice = voicesRef.current.find(v => v.lang === 'ja-JP')
+                      || voicesRef.current.find(v => v.name === 'Kyoko')
+                      || voicesRef.current.find(v => v.lang === 'ja-JP')
+                      || voicesRef.current.find(v => v.lang.startsWith('ja'));
+        }
+        if (targetVoice) {
+          utterance.voice = targetVoice;
+        }
+      }
       
       utterance.onend = () => resolve();
-      utterance.onerror = () => resolve(); // エラーでも止まらないようにする
+      utterance.onerror = () => resolve();
 
       window.speechSynthesis.speak(utterance);
     });
   }, []);
 
-  // --- 待機用ヘルパー ---
   const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-  // --- 自動再生のメインロジック ---
+  // --- 自動再生ロジック ---
   useEffect(() => {
     let isMounted = true;
 
     const playSequence = async () => {
-      // 再生中でなければ何もしない
       if (!isPlaying || !currentWord) return;
 
-      // 1. 表面（英語）を表示
       if (isFlipped) {
         setIsFlipped(false);
-        await sleep(600); // フリップアニメーション待ち
+        await sleep(600);
       }
       
       if (!isMounted || !isPlayingRef.current) return;
-
-      // 2. 英語を読み上げ
       await speak(currentWord.english, 'en-US');
 
       if (!isMounted || !isPlayingRef.current) return;
-      // 3. 設定された間隔を待機
       await sleep(intervalTime * 1000);
 
       if (!isMounted || !isPlayingRef.current) return;
-      // 4. 裏返す
       setIsFlipped(true);
-      await sleep(600); // フリップアニメーション待ち
+      await sleep(600);
 
       if (!isMounted || !isPlayingRef.current) return;
-      // 5. 日本語を読み上げ
       await speak(currentWord.meaning, 'ja-JP');
 
       if (!isMounted || !isPlayingRef.current) return;
-      // 6. 設定された間隔を待機
       await sleep(intervalTime * 1000);
 
       if (!isMounted || !isPlayingRef.current) return;
-      // 7. 次のカードへ（最後のカードでなければ）
+      
       if (currentIndex < words.length - 1) {
         setCurrentIndex(prev => prev + 1);
         setIsFlipped(false);
-        // ボタンの一時非表示（手動と同じエフェクト）
         setShowButtons(false);
         setTimeout(() => setShowButtons(true), 500);
       } else {
-        // 最後まで来たら停止
         setIsPlaying(false);
         setIsFlipped(false);
       }
@@ -111,40 +130,90 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentIndex, isPlaying]); 
-  // ↑ intervalTimeを依存配列に入れるとスライダー操作中に再実行されるため外しています
 
-
-  // --- 手動操作ハンドラ ---
-  const handleNext = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    // 手動操作時も自動再生は継続するが、現在の読み上げはリセットされる（useEffectが再発火するため）
+  // --- ナビゲーションロジック ---
+  const navigateNext = useCallback(() => {
     if (currentIndex < words.length - 1) {
       setCurrentIndex(prev => prev + 1);
       setIsFlipped(false);
       setShowButtons(false);
       setTimeout(() => setShowButtons(true), 500);
     }
-  };
+  }, [currentIndex, words.length]);
 
-  const handlePrev = (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const navigatePrev = useCallback(() => {
     if (currentIndex > 0) {
       setCurrentIndex(prev => prev - 1);
       setIsFlipped(false);
       setShowButtons(false);
       setTimeout(() => setShowButtons(true), 500);
     }
-  };
+  }, [currentIndex]);
 
-  const handleFlip = () => {
-    // フリップ時は自動再生を止める（ユーザーがじっくり見たいと判断）
+  const triggerFlip = useCallback(() => {
     if (isPlaying) setIsPlaying(false);
-
     setShowButtons(false);
     setTimeout(() => {
-      setIsFlipped(!isFlipped);
+      setIsFlipped(prev => !prev);
       setTimeout(() => setShowButtons(true), 150);
     }, 200);
+  }, [isPlaying]);
+
+  // --- キーボードイベントハンドラ (更新版) ---
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      switch (e.key) {
+        case 'ArrowRight':
+          navigateNext();
+          break;
+        case 'ArrowLeft':
+          navigatePrev();
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          triggerFlip();
+          break;
+        case ' ': // Spaceキーの処理を追加
+        case 'Space': 
+          e.preventDefault(); // スクロール防止
+          setIsPlaying(false); // 自動再生を停止して手動再生を優先
+          
+          if (isFlipped) {
+            // 裏面なら日本語（意味）を再生
+            speak(currentWord.meaning, 'ja-JP');
+          } else {
+            // 表面なら英語を再生
+            speak(currentWord.english, 'en-US');
+          }
+          break;
+        case 'Escape':
+          onClose();
+          break;
+        default:
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  // 依存配列に currentWord, isFlipped, speak, setIsPlaying を追加
+  }, [navigateNext, navigatePrev, triggerFlip, onClose, currentWord, isFlipped, speak]);
+
+  // --- クリック用ハンドラ ---
+  const handleNextClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigateNext();
+  };
+
+  const handlePrevClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigatePrev();
+  };
+
+  const handleFlipClick = () => {
+    triggerFlip();
   };
 
   const toggleStatus = async (e: React.MouseEvent, targetStatus: WordStatus) => {
@@ -162,7 +231,6 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
 
   const handleManualSpeak = (e: React.MouseEvent, text: string, lang: 'en-US'|'ja-JP') => {
     e.stopPropagation();
-    // 手動再生時は自動再生を止める
     setIsPlaying(false);
     speak(text, lang);
   }
@@ -178,7 +246,6 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
         }
         .fade-in-element { animation: fadeIn 0.3s ease-out forwards; }
         
-        /* スライダーのカスタムスタイル */
         .custom-range {
           -webkit-appearance: none;
           height: 4px;
@@ -203,9 +270,7 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
       <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
         <div className="relative w-full max-w-lg aspect-square">
           
-          {/* --- Header Controls (Close & Auto Play) --- */}
-          
-          {/* Close Button (Right) */}
+          {/* Close Button */}
           <button 
               onClick={() => {
                 setIsPlaying(false);
@@ -216,11 +281,9 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
               <i className="fa-solid fa-times"></i>
           </button>
 
-          {/* Auto Play Controls (Left) */}
+          {/* Controls */}
           <div className="absolute -top-16 left-0 flex flex-col gap-2 z-50">
              <div className="flex items-center gap-3 bg-slate-800/80 backdrop-blur-md p-2 rounded-2xl border border-white/10 shadow-lg">
-                
-                {/* Play/Stop Button */}
                 <button 
                   onClick={() => setIsPlaying(!isPlaying)}
                   className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${
@@ -232,7 +295,6 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
                   <i className={`fa-solid ${isPlaying ? 'fa-stop' : 'fa-play'}`}></i>
                 </button>
 
-                {/* Interval Slider */}
                 <div className="flex flex-col px-2 w-28">
                   <div className="flex justify-between text-[10px] text-white/80 font-mono mb-1">
                     <span>Speed</span>
@@ -241,8 +303,8 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
                   <input 
                     type="range" 
                     min="0.1" 
-                    max="1.0" 
-                    step="0.1" 
+                    max="1.5" 
+                    step="0.2" 
                     value={intervalTime}
                     onChange={(e) => setIntervalTime(parseFloat(e.target.value))}
                     className="w-full custom-range cursor-pointer"
@@ -251,12 +313,11 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
              </div>
           </div>
 
-
-          {/* --- Card Container --- */}
+          {/* Main Card */}
           <div 
               className="w-full h-full cursor-pointer"
               style={{ perspective: '1000px' }}
-              onClick={handleFlip}
+              onClick={handleFlipClick}
           >
             <div 
               className="relative w-full h-full transition-transform duration-500" 
@@ -276,7 +337,7 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
                       ))}
                   </div>
                   
-                  {/* Audio Button */}
+                  {/* Audio Button (Front Only) */}
                   {!isFlipped && showButtons && (
                       <button 
                           onClick={(e) => handleManualSpeak(e, currentWord.english, 'en-US')}
@@ -285,6 +346,11 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
                           <i className="fa-solid fa-volume-high"></i>
                       </button>
                   )}
+                   
+                  {/* Visual Hint for Space Key */}
+                  <div className="absolute bottom-16 text-slate-300 text-[10px] font-mono opacity-50">
+                    SPACE to speak
+                  </div>
 
                   {/* Status Badges */}
                   {!isFlipped && showButtons && (
@@ -322,7 +388,7 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
                       </div>
                   )}
                   
-                  <p className="absolute bottom-8 text-slate-400 text-sm">Tap to flip</p>
+                  <p className="absolute bottom-8 text-slate-400 text-sm">Tap or ↑ to flip</p>
               </div>
 
               {/* Back (Meaning) */}
@@ -339,37 +405,27 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
                           <p className="text-slate-400">{currentWord.examples[0].translation}</p>
                       </div>
                   )}
-                  
-                  {/* Audio Button */}
-                  {isFlipped && showButtons && (
-                      <div className="mt-6 flex gap-4 fade-in-element">
-                           <button 
-                              onClick={(e) => handleManualSpeak(e, currentWord.meaning, 'ja-JP')}
-                              className="w-12 h-12 rounded-full bg-indigo-600 flex items-center justify-center hover:bg-indigo-500 transition-colors active:scale-95"
-                          >
-                              <i className="fa-solid fa-volume-high"></i>
-                          </button>
-                      </div>
-                  )}
               </div>
             </div>
           </div>
 
-          {/* --- Navigation Buttons (Preserved) --- */}
+          {/* Navigation Buttons */}
           <div className="absolute top-1/2 -left-4 sm:-left-16 transform -translate-y-1/2">
               <button 
-                  onClick={handlePrev} 
+                  onClick={handlePrevClick} 
                   disabled={currentIndex === 0}
                   className="w-12 h-12 rounded-full bg-white shadow-lg flex items-center justify-center text-slate-700 disabled:opacity-50 hover:scale-110 transition-all z-40"
+                  title="Previous (Left Arrow)"
               >
                   <i className="fa-solid fa-chevron-left"></i>
               </button>
           </div>
           <div className="absolute top-1/2 -right-4 sm:-right-16 transform -translate-y-1/2">
               <button 
-                  onClick={handleNext}
+                  onClick={handleNextClick}
                   disabled={currentIndex === words.length - 1}
                   className="w-12 h-12 rounded-full bg-white shadow-lg flex items-center justify-center text-slate-700 disabled:opacity-50 hover:scale-110 transition-all z-40"
+                  title="Next (Right Arrow)"
               >
                   <i className="fa-solid fa-chevron-right"></i>
               </button>
