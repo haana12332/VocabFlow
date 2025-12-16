@@ -2,8 +2,8 @@ import { GoogleGenerativeAI, SchemaType, Schema } from "@google/generative-ai";
 import { WordDocument } from "../types";
 
 // ▼ 変更: 定数を削除し、許可されたモデルのリストを定義
-const ALLOWED_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite","gemini-1.5-flash","gemini-1.5-pro"];
-const DEFAULT_MODEL = "gemini-1.5-flash";
+const ALLOWED_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
+const DEFAULT_MODEL = "gemini-2.5-flash";
 
 // --- ヘルパー関数: 設定とAIクライアントを動的に取得 ---
 const getAIConfig = () => {
