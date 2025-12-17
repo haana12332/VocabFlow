@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useMemo, memo } from 'react'; // useRef, useCallbackの一部は不要になる場合がありますが、念のため残してもOK
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Navbar } from './components/Navbar';
 import { WordCard } from './components/WordCard';
+import { MilestoneCard } from './components/MilestoneCard'; // ★ 作成したファイルをインポート
 import { AddWordModal } from './components/AddWordModal';
 import { Settings } from './components/Settings'; 
 import { FlashcardView } from './components/FlashcardView';
@@ -8,28 +9,23 @@ import { QuizModal } from './components/QuizModal';
 import { WordDetailModal } from './components/WordDetailModal';
 import { DailyCommentModal } from './components/DailyCommentModal'; 
 import { SortDropdown } from './components/SortDropdown';
-import { FilterBar } from './components/FilterBar';
+import { FilterBar } from './components/FilterBar'; // ★ 作成したファイルをインポート
 import { Login } from './components/Login'; 
-import { fetchAllWords, deleteWord, auth, getUserProfile } from './firebase'; 
+import { fetchAllWords, deleteWord, auth, getUserProfile } from './firebase'; // ★ fetchAllWordsを使用
 import { onAuthStateChanged, User, signOut } from 'firebase/auth';
 import { WordDocument, WordStatus } from './types';
-import { MilestoneCard } from './components/MilestoneCard';
-// App コンポーネント
+
 function App() {
-  // Auth State
+  // --- Auth State ---
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [isConfigVerified, setIsConfigVerified] = useState(false);
 
-  // App State
+  // --- App State ---
   const [words, setWords] = useState<WordDocument[]>([]);
-  // ★ 削除: lastVisible, hasMore は不要
-  // const [lastVisible, setLastVisible] = useState<any>(null);
-  // const [hasMore, setHasMore] = useState(true);
-  
   const [loading, setLoading] = useState(false);
 
-  // Modals
+  // --- Modals State ---
   const [showAddModal, setShowAddModal] = useState(false);
   const [showQuizModal, setShowQuizModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -37,13 +33,11 @@ function App() {
   const [showDailyComment, setShowDailyComment] = useState(false);
   const [selectedWord, setSelectedWord] = useState<WordDocument | null>(null);
 
-  // Search State
+  // --- Search & Sort State ---
   const [searchTerm, setSearchTerm] = useState('');
-  
-  // Sort State
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest' | 'a-z' | 'z-a' | 'toeic-high' | 'toeic-low'>('newest');
   
-  // Filter States
+  // --- Filter State ---
   const [filterCategory, setFilterCategory] = useState<string>('All');
   const [filterStatus, setFilterStatus] = useState<string>('All');
   const [filterPos, setFilterPos] = useState<string>('All');
@@ -53,7 +47,7 @@ function App() {
   const [filterIndexFrom, setFilterIndexFrom] = useState<string>('');
   const [filterIndexTo, setFilterIndexTo] = useState<string>('');
 
-  // ユーザー認証の監視 & 設定同期
+  // --- Auth & Initial Data Load ---
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (!currentUser) {
@@ -64,6 +58,7 @@ function App() {
       }
 
       try {
+          // ユーザー設定の同期処理
           const profile = await getUserProfile(currentUser.uid);
           
           if (profile?.settings) {
@@ -101,7 +96,6 @@ function App() {
           console.error("Failed to sync user settings", error);
       }
 
-      // ★ 修正: ステート初期化のみ行う
       setWords([]);
       setUser(currentUser);
       setAuthLoading(false);
@@ -110,33 +104,26 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  // ★ 削除: Infinite Scroll Observer (observer, lastWordElementRef) はすべて削除
-
-  // ★ 修正: 一括読み込み用の関数
-  const loadWords = async () => {
+  // データ一括読み込み関数
+  const loadWords = useCallback(async () => {
     if (!user || !isConfigVerified) return;
 
     setLoading(true);
-    // ここで全件取得関数を呼ぶ (引数は必要に応じて user.uid などを渡す)
+    // 全件取得 (ページネーションなし)
     const allWords = await fetchAllWords(user.uid); 
     setWords(allWords);
     setLoading(false);
-  };
+  }, [user, isConfigVerified]);
 
-  // ★ 修正: 初期データ読み込み (依存配列から authLoading などを適切に監視)
+  // 初期ロード実行
   useEffect(() => {
     if (user && !authLoading && isConfigVerified) {
         loadWords();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, authLoading, isConfigVerified]);
+  }, [user, authLoading, isConfigVerified, loadWords]);
 
-  // ★ 削除または修正: 時間経過による自動読み込み
-  // 全件取得の場合、頻繁な自動リロードは負荷が高いため削除推奨ですが、
-  // どうしても必要なら setInterval で loadWords() を呼んでください。
-  // ここでは削除します。
 
-  // Handler Functions
+  // --- Event Handlers ---
   const handleWordAdded = (newWord: WordDocument) => {
     setWords(prev => [newWord, ...prev]);
   };
@@ -171,7 +158,7 @@ function App() {
     }
   };
 
-  // Derive Filter Options (ここはそのまま)
+  // --- Derive Filter Options ---
   const categoriesString = useMemo(() => 
     Array.from(new Set(words.map(w => w.category))).sort().join(','), 
     [words.length, words.map(w => w.category).join(',')]
@@ -192,7 +179,6 @@ function App() {
     return Array.from(new Set([...pos])).sort();
   }, [posString]);
 
-  // Check if any filter is active (そのまま)
   const isAnyFilterActive = useMemo(() => {
     return filterCategory !== 'All' || 
            filterStatus !== 'All' || 
@@ -204,7 +190,6 @@ function App() {
            filterIndexTo !== '';
   }, [filterCategory, filterStatus, filterPos, filterToeic, filterDateFrom, filterDateTo, filterIndexFrom, filterIndexTo]);
 
-  // Reset all filters (そのまま)
   const handleResetFilters = () => {
      setFilterCategory('All');
      setFilterStatus('All');
@@ -216,22 +201,14 @@ function App() {
      setFilterIndexTo('');
   };
 
-  // Client-side filtering/sorting (そのまま)
-  const processedWords = words
-    .filter(w => {
-        const matchesSearch = w.english.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                              w.meaning.includes(searchTerm);
-        if (!matchesSearch) return false;
+  // --- Core Logic: Filtering & Sorting (Priority: Date > Sort > Range > Others) ---
+  const processedWords = useMemo(() => {
+    // 0. 配列のコピーを作成
+    let tempWords = [...words];
 
-        if (filterCategory !== 'All' && w.category !== filterCategory) return false;
-        if (filterStatus !== 'All' && w.status !== filterStatus) return false;
-        if (filterPos !== 'All' && !w.partOfSpeech.includes(filterPos)) return false;
-        if (filterToeic !== 'All') {
-            const minScore = parseInt(filterToeic);
-            if ((w.toeicLevel || 0) < minScore) return false;
-        }
-        
-        if (filterDateFrom || filterDateTo) {
+    // Priority 1: Date Filter (日付)
+    if (filterDateFrom || filterDateTo) {
+        tempWords = tempWords.filter(w => {
             const wordDate = w.createdAt?.seconds ? new Date(w.createdAt.seconds * 1000) : null;
             if (!wordDate) return false;
             
@@ -240,30 +217,84 @@ function App() {
                 fromDate.setHours(0, 0, 0, 0);
                 if (wordDate < fromDate) return false;
             }
-            
             if (filterDateTo) {
                 const toDate = new Date(filterDateTo);
                 toDate.setHours(23, 59, 59, 999);
                 if (wordDate > toDate) return false;
             }
-        }
+            return true;
+        });
+    }
 
-        return true;
-    })
-    .sort((a, b) => {
+    // Priority 2: Sorting (Rangeを適用する前に順序を確定)
+    tempWords.sort((a, b) => {
         if (sortOrder === 'newest') return b.createdAt.seconds - a.createdAt.seconds;
         if (sortOrder === 'oldest') return a.createdAt.seconds - b.createdAt.seconds;
         if (sortOrder === 'z-a') return b.english.localeCompare(a.english);
         if (sortOrder === 'toeic-high') return (b.toeicLevel || 0) - (a.toeicLevel || 0);
         if (sortOrder === 'toeic-low') return (a.toeicLevel || 0) - (b.toeicLevel || 0);
-        return a.english.localeCompare(b.english); // Default 'a-z'
-    })
-    .filter((_, index) => {
-        const start = filterIndexFrom ? Math.max(0, parseInt(filterIndexFrom) - 1) : 0;
-        const end = filterIndexTo ? parseInt(filterIndexTo) : Infinity;
-        return index >= start && index < end;
+        return a.english.localeCompare(b.english); 
     });
 
+    // Priority 3: Range / Word Index (範囲切り取り)
+    // ★ Statusなどで絞り込む「前」にここで切り取ります
+    if (filterIndexFrom || filterIndexTo) {
+        const start = filterIndexFrom ? Math.max(0, parseInt(filterIndexFrom) - 1) : 0;
+        const end = filterIndexTo ? parseInt(filterIndexTo) : tempWords.length;
+        
+        // sliceで範囲を切り出し
+        tempWords = tempWords.slice(start, end);
+    }
+
+    // Priority 4: Other Filters (Search, Category, Status, etc.)
+    // ★ 切り取られた範囲の中でさらに条件に合うものを探します
+    if (
+        searchTerm || 
+        filterCategory !== 'All' || 
+        filterStatus !== 'All' || 
+        filterPos !== 'All' || 
+        filterToeic !== 'All'
+    ) {
+        tempWords = tempWords.filter(w => {
+            // Search
+            if (searchTerm) {
+                const matchesSearch = w.english.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                                      w.meaning.includes(searchTerm);
+                if (!matchesSearch) return false;
+            }
+
+            // Category
+            if (filterCategory !== 'All' && w.category !== filterCategory) return false;
+            // Status
+            if (filterStatus !== 'All' && w.status !== filterStatus) return false;
+            // POS
+            if (filterPos !== 'All' && !w.partOfSpeech.includes(filterPos)) return false;
+            // TOEIC
+            if (filterToeic !== 'All') {
+                const minScore = parseInt(filterToeic);
+                if ((w.toeicLevel || 0) < minScore) return false;
+            }
+            return true;
+        });
+    }
+
+    return tempWords;
+  }, [
+    words, 
+    sortOrder, 
+    filterDateFrom, 
+    filterDateTo, 
+    filterIndexFrom, 
+    filterIndexTo, 
+    searchTerm, 
+    filterCategory, 
+    filterStatus, 
+    filterPos, 
+    filterToeic
+  ]);
+
+
+  // --- Render ---
   if (authLoading || (user && !isConfigVerified)) {
     return (
         <div className="min-h-screen flex items-center justify-center bg-[#f0f4f8]">
@@ -289,7 +320,7 @@ function App() {
  
       <div className="max-w-7xl mx-auto px-4 pt-4">
         
-        {/* Controls Section (Search, Flashcards, Sort) */}
+        {/* Controls Section */}
         <div className="flex flex-col gap-6 mb-4">
             <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                 <div className="relative w-full md:w-96 group">
@@ -324,7 +355,7 @@ function App() {
                 </div>
             </div>
 
-            {/* Mobile-Friendly Filter Bar */}
+            {/* Filter Bar (With Priority Modal) */}
             <FilterBar 
                 category={filterCategory} setCategory={setFilterCategory} categoryOptions={uniqueCategories}
                 status={filterStatus} setStatus={setFilterStatus}
@@ -339,27 +370,28 @@ function App() {
             />
         </div>
 
-        {/* Word Grid */}
+        {/* Word Grid (With Milestone Cards) */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {processedWords.map((word, index) => {
-              const currentCount = index + 1;
-              const showMilestone = currentCount % 100 === 0; // 100, 200, 300... の時にtrue
+            {processedWords.map((word, index) => {
+                const currentCount = index + 1;
+                // 100単語ごとのマイルストーン表示
+                const showMilestone = currentCount > 0 && currentCount % 100 === 0;
 
-              return (
-              <React.Fragment key={word.id}>
-                  {/* 通常の単語カード */}
-                  <div>
-                      <WordCard word={word} onClick={setSelectedWord} />
-                  </div>
+                return (
+                    <React.Fragment key={word.id}>
+                        {/* Word Card */}
+                        <div className="animate-in fade-in duration-500">
+                            <WordCard word={word} onClick={setSelectedWord} />
+                        </div>
 
-                  {/* 100単語ごとのマイルストーンカード */}
-                  {showMilestone && (
-                      <div className="animate-in zoom-in-50 duration-500">
-                          <MilestoneCard count={currentCount} />
-                      </div>
-                  )}
-              </React.Fragment>
-              );
+                        {/* Milestone Card */}
+                        {showMilestone && (
+                            <div className="animate-in zoom-in-50 duration-500">
+                                <MilestoneCard count={currentCount} />
+                            </div>
+                        )}
+                    </React.Fragment>
+                );
             })}
         </div>
 
