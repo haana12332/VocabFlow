@@ -31,7 +31,29 @@ const defaultFirebaseConfig: FirebaseOptions = {
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
   appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
+export const fetchAllWords = async (userId: string) => {
+  try {
+    // limit() や startAfter() を使わずにクエリを作成
+    // ※もし userId でフィルタリングしている場合は where('userId', '==', userId) を入れてください
+    const q = query(
+      collection(db, "words"), // コレクション名はご自身の環境に合わせてください
+      orderBy("createdAt", "desc")
+    );
 
+    const querySnapshot = await getDocs(q);
+    
+    // データを整形して返す
+    const words = querySnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    })) as WordDocument[];
+
+    return words;
+  } catch (error) {
+    console.error("Error fetching all words:", error);
+    return [];
+  }
+};
 const getEffectiveConfig = (): FirebaseOptions => {
   try {
     const customConfigStr = localStorage.getItem('custom_firebase_config');
