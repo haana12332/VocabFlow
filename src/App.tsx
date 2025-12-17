@@ -10,11 +10,10 @@ import { DailyCommentModal } from './components/DailyCommentModal';
 import { SortDropdown } from './components/SortDropdown';
 import { FilterBar } from './components/FilterBar';
 import { Login } from './components/Login'; 
-// ★ fetchWords の代わりに fetchAllWords をインポート（firebase.tsで定義したもの）
 import { fetchAllWords, deleteWord, auth, getUserProfile } from './firebase'; 
 import { onAuthStateChanged, User, signOut } from 'firebase/auth';
 import { WordDocument, WordStatus } from './types';
-
+import { MilestoneCard } from './components/MilestoneCard';
 // App コンポーネント
 function App() {
   // Auth State
@@ -342,10 +341,26 @@ function App() {
 
         {/* Word Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            {processedWords.map((word) => (
-                // ★ 修正: ref={lastWordElementRef} を削除
-                <div key={word.id}><WordCard word={word} onClick={setSelectedWord} /></div>
-            ))}
+          {processedWords.map((word, index) => {
+              const currentCount = index + 1;
+              const showMilestone = currentCount % 100 === 0; // 100, 200, 300... の時にtrue
+
+              return (
+              <React.Fragment key={word.id}>
+                  {/* 通常の単語カード */}
+                  <div>
+                      <WordCard word={word} onClick={setSelectedWord} />
+                  </div>
+
+                  {/* 100単語ごとのマイルストーンカード */}
+                  {showMilestone && (
+                      <div className="animate-in zoom-in-50 duration-500">
+                          <MilestoneCard count={currentCount} />
+                      </div>
+                  )}
+              </React.Fragment>
+              );
+            })}
         </div>
 
         {loading && (

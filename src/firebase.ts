@@ -256,39 +256,39 @@ export const deleteWord = async (id: string) => {
     await deleteDoc(doc(db, WORDS_COLLECTION, id));
 };
 
-export const fetchWords = async (lastVisible: QueryDocumentSnapshot<DocumentData> | null) => {
-  try {
-    const currentUser = auth.currentUser;
-    if (!currentUser) return { words: [], lastVisible: null };
+// export const fetchWords = async (lastVisible: QueryDocumentSnapshot<DocumentData> | null) => {
+//   try {
+//     const currentUser = auth.currentUser;
+//     if (!currentUser) return { words: [], lastVisible: null };
 
-    let constraints: any[] = [
-        orderBy("createdAt", "desc"),
-        limit(PAGE_SIZE)
-    ];
+//     let constraints: any[] = [
+//         orderBy("createdAt", "desc"),
+//         limit(PAGE_SIZE)
+//     ];
 
-    if (lastVisible) {
-        constraints.push(startAfter(lastVisible));
-    }
+//     if (lastVisible) {
+//         constraints.push(startAfter(lastVisible));
+//     }
 
-    const q = query(
-      collection(db, WORDS_COLLECTION),
-      ...constraints
-    );
+//     const q = query(
+//       collection(db, WORDS_COLLECTION),
+//       ...constraints
+//     );
 
-    const querySnapshot = await getDocs(q);
-    const newLastVisible = querySnapshot.docs[querySnapshot.docs.length - 1];
+//     const querySnapshot = await getDocs(q);
+//     const newLastVisible = querySnapshot.docs[querySnapshot.docs.length - 1];
     
-    const words: WordDocument[] = querySnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    } as WordDocument));
+//     const words: WordDocument[] = querySnapshot.docs.map(doc => ({
+//       id: doc.id,
+//       ...doc.data()
+//     } as WordDocument));
 
-    return { words, lastVisible: newLastVisible };
-  } catch (error: any) {
-    console.error("Error fetching words:", error);
-    return { words: [], lastVisible: null };
-  }
-};
+//     return { words, lastVisible: newLastVisible };
+//   } catch (error: any) {
+//     console.error("Error fetching words:", error);
+//     return { words: [], lastVisible: null };
+//   }
+// };
 
 // ★変更: ルートの "Comments" コレクションから取得 (userIdはパスには含めないが、シグネチャは維持)
 // DBインスタンスは `db` (custom/dataApp) を使用
