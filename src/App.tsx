@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Navbar } from './components/Navbar';
 import { WordCard } from './components/WordCard';
-import { MilestoneCard } from './components/MilestoneCard'; // ★ 作成したファイルをインポート
+import { MilestoneCard } from './components/MilestoneCard';
 import { AddWordModal } from './components/AddWordModal';
 import { Settings } from './components/Settings'; 
 import { FlashcardView } from './components/FlashcardView';
@@ -9,11 +9,14 @@ import { QuizModal } from './components/QuizModal';
 import { WordDetailModal } from './components/WordDetailModal';
 import { DailyCommentModal } from './components/DailyCommentModal'; 
 import { SortDropdown } from './components/SortDropdown';
-import { FilterBar } from './components/FilterBar'; // ★ 作成したファイルをインポート
+import { FilterBar } from './components/FilterBar';
 import { Login } from './components/Login'; 
-import { fetchAllWords, deleteWord, auth, getUserProfile } from './firebase'; // ★ fetchAllWordsを使用
+import { fetchAllWords, deleteWord, auth, getUserProfile } from './firebase';
 import { onAuthStateChanged, User, signOut } from 'firebase/auth';
 import { WordDocument, WordStatus } from './types';
+
+// ソート用に初期インデックスを保持する型
+type WordWithOrder = WordDocument & { initialOrder: number };
 
 function App() {
   // --- Auth State ---
@@ -22,7 +25,7 @@ function App() {
   const [isConfigVerified, setIsConfigVerified] = useState(false);
 
   // --- App State ---
-  const [words, setWords] = useState<WordDocument[]>([]);
+  const [words, setWords] = useState<WordWithOrder[]>([]);
   const [loading, setLoading] = useState(false);
 
   // --- Modals State ---
@@ -35,8 +38,12 @@ function App() {
 
   // --- Search & Sort State ---
   const [searchTerm, setSearchTerm] = useState('');
+  // ユーザーが画面上で選択しているソート順
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest' | 'a-z' | 'z-a' | 'toeic-high' | 'toeic-low'>('newest');
   
+  // ★ 追加: 範囲指定フィルタ適用時の「基準となったソート順」を保存する変数
+  const [frozenSortOrder, setFrozenSortOrder] = useState<string | null>(null);
+
   // --- Filter State ---
   const [filterCategory, setFilterCategory] = useState<string>('All');
   const [filterStatus, setFilterStatus] = useState<string>('All');
@@ -58,35 +65,28 @@ function App() {
       }
 
       try {
-          // ユーザー設定の同期処理
           const profile = await getUserProfile(currentUser.uid);
           
           if (profile?.settings) {
               let needsReload = false;
-
               if (profile.settings.language) {
                   const currentLang = localStorage.getItem('app_language');
                   if (currentLang !== profile.settings.language) {
                       localStorage.setItem('app_language', profile.settings.language);
                   }
               }
-
               if (profile.settings.geminiKey) {
                   const currentGemini = localStorage.getItem('gemini_api_key');
                   if (currentGemini !== profile.settings.geminiKey) {
                       localStorage.setItem('gemini_api_key', profile.settings.geminiKey);
                   }
               }
-
               const remoteConfig = profile.settings.firebaseConfig;
               const currentConfig = localStorage.getItem('custom_firebase_config');
-
               if (remoteConfig && remoteConfig !== currentConfig) {
-                  console.log("Detecting new database config. Syncing and reloading...");
                   localStorage.setItem('custom_firebase_config', remoteConfig);
                   needsReload = true;
               }
-
               if (needsReload) {
                   window.location.reload();
                   return;
@@ -104,32 +104,36 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  // データ一括読み込み関数
   const loadWords = useCallback(async () => {
     if (!user || !isConfigVerified) return;
 
     setLoading(true);
-    // 全件取得 (ページネーションなし)
     const allWords = await fetchAllWords(user.uid); 
-    setWords(allWords);
+    
+    // ロード時に連番（Newest=0, 1, 2...）を振り、これを「不変の順番」として扱います
+    const indexedWords: WordWithOrder[] = allWords.map((word, index) => ({
+      ...word,
+      initialOrder: index
+    }));
+
+    setWords(indexedWords);
     setLoading(false);
   }, [user, isConfigVerified]);
 
-  // 初期ロード実行
   useEffect(() => {
     if (user && !authLoading && isConfigVerified) {
         loadWords();
     }
   }, [user, authLoading, isConfigVerified, loadWords]);
 
-
   // --- Event Handlers ---
   const handleWordAdded = (newWord: WordDocument) => {
-    setWords(prev => [newWord, ...prev]);
+    const wordWithOrder: WordWithOrder = { ...newWord, initialOrder: -1 }; 
+    setWords(prev => [wordWithOrder, ...prev]);
   };
 
   const handleWordUpdated = (updatedWord: WordDocument) => {
-    setWords(prev => prev.map(w => w.id === updatedWord.id ? updatedWord : w));
+    setWords(prev => prev.map(w => w.id === updatedWord.id ? { ...updatedWord, initialOrder: w.initialOrder } : w));
     if (selectedWord && selectedWord.id === updatedWord.id) {
         setSelectedWord(updatedWord);
     }
@@ -159,56 +163,46 @@ function App() {
   };
 
   // --- Derive Filter Options ---
-  const categoriesString = useMemo(() => 
-    Array.from(new Set(words.map(w => w.category))).sort().join(','), 
-    [words.length, words.map(w => w.category).join(',')]
-  );
-  
-  const uniqueCategories = useMemo(() => {
-    const categories = categoriesString ? categoriesString.split(',') : [];
-    return Array.from(new Set([...categories])).sort();
-  }, [categoriesString]);
-  
-  const posString = useMemo(() => 
-    Array.from(new Set(words.flatMap(w => w.partOfSpeech))).sort().join(','), 
-    [words.length, words.flatMap(w => w.partOfSpeech).join(',')]
-  );
-  
-  const uniquePos = useMemo(() => {
-    const pos = posString ? posString.split(',') : [];
-    return Array.from(new Set([...pos])).sort();
-  }, [posString]);
+  const categoriesString = useMemo(() => Array.from(new Set(words.map(w => w.category))).sort().join(','), [words]);
+  const uniqueCategories = useMemo(() => categoriesString ? categoriesString.split(',') : [], [categoriesString]);
+  const posString = useMemo(() => Array.from(new Set(words.flatMap(w => w.partOfSpeech))).sort().join(','), [words]);
+  const uniquePos = useMemo(() => posString ? posString.split(',') : [], [posString]);
 
   const isAnyFilterActive = useMemo(() => {
-    return filterCategory !== 'All' || 
-           filterStatus !== 'All' || 
-           filterPos !== 'All' || 
-           filterToeic !== 'All' || 
-           filterDateFrom !== '' || 
-           filterDateTo !== '' || 
-           filterIndexFrom !== '' || 
-           filterIndexTo !== '';
+    return filterCategory !== 'All' || filterStatus !== 'All' || filterPos !== 'All' || filterToeic !== 'All' || filterDateFrom !== '' || filterDateTo !== '' || filterIndexFrom !== '' || filterIndexTo !== '';
   }, [filterCategory, filterStatus, filterPos, filterToeic, filterDateFrom, filterDateTo, filterIndexFrom, filterIndexTo]);
 
   const handleResetFilters = () => {
-     setFilterCategory('All');
-     setFilterStatus('All');
-     setFilterPos('All');
-     setFilterToeic('All');
-     setFilterDateFrom('');
-     setFilterDateTo('');
-     setFilterIndexFrom('');
-     setFilterIndexTo('');
+     setFilterCategory('All'); setFilterStatus('All'); setFilterPos('All'); setFilterToeic('All');
+     setFilterDateFrom(''); setFilterDateTo(''); setFilterIndexFrom(''); setFilterIndexTo('');
   };
 
-  // --- Core Logic: Filtering & Sorting (Priority: Date > Sort > Range > Others) ---
+  // --- ★ 追加: フィルター状態の監視と「基準ソート」の固定/解除 ---
+  useEffect(() => {
+    const hasIndexFilter = filterIndexFrom !== '' || filterIndexTo !== '';
+    
+    if (hasIndexFilter) {
+        // フィルター開始時、まだ固定されていなければ、現在のソート順を「基準」として保存する
+        if (frozenSortOrder === null) {
+            setFrozenSortOrder(sortOrder);
+        }
+    } else {
+        // フィルターが解除されたら、固定を解除する
+        setFrozenSortOrder(null);
+    }
+  }, [filterIndexFrom, filterIndexTo, sortOrder, frozenSortOrder]);
+
+
+  // --- ★ 修正: Filter -> Base Sort (Locked) -> Slice -> Display Sort のロジック ---
   const processedWords = useMemo(() => {
-    // 0. 配列のコピーを作成
     let tempWords = [...words];
 
-    // Priority 1: Date Filter (日付)
-    if (filterDateFrom || filterDateTo) {
-        tempWords = tempWords.filter(w => {
+    // =========================================================
+    // Step 1: 共通フィルタ (検索・カテゴリなど)
+    // =========================================================
+    tempWords = tempWords.filter(w => {
+        // Date
+        if (filterDateFrom || filterDateTo) {
             const wordDate = w.createdAt?.seconds ? new Date(w.createdAt.seconds * 1000) : null;
             if (!wordDate) return false;
             
@@ -222,77 +216,91 @@ function App() {
                 toDate.setHours(23, 59, 59, 999);
                 if (wordDate > toDate) return false;
             }
-            return true;
-        });
-    }
-
-    // Priority 2: Sorting (Rangeを適用する前に順序を確定)
-    tempWords.sort((a, b) => {
-        if (sortOrder === 'newest') return b.createdAt.seconds - a.createdAt.seconds;
-        if (sortOrder === 'oldest') return a.createdAt.seconds - b.createdAt.seconds;
-        if (sortOrder === 'z-a') return b.english.localeCompare(a.english);
-        if (sortOrder === 'toeic-high') return (b.toeicLevel || 0) - (a.toeicLevel || 0);
-        if (sortOrder === 'toeic-low') return (a.toeicLevel || 0) - (b.toeicLevel || 0);
-        return a.english.localeCompare(b.english); 
+        }
+        // Search
+        if (searchTerm) {
+            const matchesSearch = w.english.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                                  w.meaning.includes(searchTerm);
+            if (!matchesSearch) return false;
+        }
+        // Others
+        if (filterCategory !== 'All' && w.category !== filterCategory) return false;
+        if (filterStatus !== 'All' && w.status !== filterStatus) return false;
+        if (filterPos !== 'All' && !w.partOfSpeech.includes(filterPos)) return false;
+        if (filterToeic !== 'All') {
+            const minScore = parseInt(filterToeic);
+            if ((w.toeicLevel || 0) < minScore) return false;
+        }
+        return true;
     });
 
-    // Priority 3: Range / Word Index (範囲切り取り)
-    // ★ Statusなどで絞り込む「前」にここで切り取ります
+
+    // =========================================================
+    // Step 2: ベースソート (Base Sort)
+    // 範囲指定がある場合は「保存された基準ソート」を使い、
+    // 切り取られる単語のメンツが変わらないようにします。
+    // =========================================================
+    const sortStrategy = frozenSortOrder || sortOrder;
+
+    tempWords.sort((a, b) => {
+        switch (sortStrategy) {
+            case 'newest': return a.initialOrder - b.initialOrder;
+            case 'oldest': return b.initialOrder - a.initialOrder;
+            case 'a-z': return a.english.localeCompare(b.english);
+            case 'z-a': return b.english.localeCompare(a.english);
+            case 'toeic-high': return (b.toeicLevel || 0) - (a.toeicLevel || 0);
+            case 'toeic-low': return (a.toeicLevel || 0) - (b.toeicLevel || 0);
+            default: return 0;
+        }
+    });
+
+
+    // =========================================================
+    // Step 3: 範囲切り取り (Slice)
+    // 「基準ソート」で並んだリストから指定範囲を切り取ります。
+    // =========================================================
     if (filterIndexFrom || filterIndexTo) {
         const start = filterIndexFrom ? Math.max(0, parseInt(filterIndexFrom) - 1) : 0;
         const end = filterIndexTo ? parseInt(filterIndexTo) : tempWords.length;
         
-        // sliceで範囲を切り出し
         tempWords = tempWords.slice(start, end);
     }
 
-    // Priority 4: Other Filters (Search, Category, Status, etc.)
-    // ★ 切り取られた範囲の中でさらに条件に合うものを探します
-    if (
-        searchTerm || 
-        filterCategory !== 'All' || 
-        filterStatus !== 'All' || 
-        filterPos !== 'All' || 
-        filterToeic !== 'All'
-    ) {
-        tempWords = tempWords.filter(w => {
-            // Search
-            if (searchTerm) {
-                const matchesSearch = w.english.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                                      w.meaning.includes(searchTerm);
-                if (!matchesSearch) return false;
-            }
 
-            // Category
-            if (filterCategory !== 'All' && w.category !== filterCategory) return false;
-            // Status
-            if (filterStatus !== 'All' && w.status !== filterStatus) return false;
-            // POS
-            if (filterPos !== 'All' && !w.partOfSpeech.includes(filterPos)) return false;
-            // TOEIC
-            if (filterToeic !== 'All') {
-                const minScore = parseInt(filterToeic);
-                if ((w.toeicLevel || 0) < minScore) return false;
+    // =========================================================
+    // Step 4: 表示用ソート (Display Sort)
+    // 範囲指定中（frozenSortOrderがある）の場合、手元にあるカードを
+    // ユーザーが現在選択している順序（sortOrder）に並び替えます。
+    // =========================================================
+    if (frozenSortOrder) {
+         tempWords.sort((a, b) => {
+            switch (sortOrder) {
+                case 'newest': return a.initialOrder - b.initialOrder;
+                case 'oldest': return b.initialOrder - a.initialOrder;
+                case 'a-z': return a.english.localeCompare(b.english);
+                case 'z-a': return b.english.localeCompare(a.english);
+                case 'toeic-high': return (b.toeicLevel || 0) - (a.toeicLevel || 0);
+                case 'toeic-low': return (a.toeicLevel || 0) - (b.toeicLevel || 0);
+                default: return 0;
             }
-            return true;
         });
     }
 
     return tempWords;
   }, [
     words, 
-    sortOrder, 
-    filterDateFrom, 
-    filterDateTo, 
+    sortOrder,        // 表示ソートの変更を検知
+    frozenSortOrder,  // 基準ソートの変更を検知
     filterIndexFrom, 
     filterIndexTo, 
     searchTerm, 
     filterCategory, 
     filterStatus, 
     filterPos, 
-    filterToeic
+    filterToeic,
+    filterDateFrom,
+    filterDateTo
   ]);
-
 
   // --- Render ---
   if (authLoading || (user && !isConfigVerified)) {
@@ -355,7 +363,7 @@ function App() {
                 </div>
             </div>
 
-            {/* Filter Bar (With Priority Modal) */}
+            {/* Filter Bar */}
             <FilterBar 
                 category={filterCategory} setCategory={setFilterCategory} categoryOptions={uniqueCategories}
                 status={filterStatus} setStatus={setFilterStatus}
@@ -370,21 +378,17 @@ function App() {
             />
         </div>
 
-        {/* Word Grid (With Milestone Cards) */}
+        {/* Word Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             {processedWords.map((word, index) => {
                 const currentCount = index + 1;
-                // 100単語ごとのマイルストーン表示
                 const showMilestone = currentCount > 0 && currentCount % 100 === 0;
 
                 return (
                     <React.Fragment key={word.id}>
-                        {/* Word Card */}
                         <div className="animate-in fade-in duration-500">
                             <WordCard word={word} onClick={setSelectedWord} />
                         </div>
-
-                        {/* Milestone Card */}
                         {showMilestone && (
                             <div className="animate-in zoom-in-50 duration-500">
                                 <MilestoneCard count={currentCount} />
