@@ -15,16 +15,13 @@ import { fetchAllWords, deleteWord, auth, getUserProfile } from './firebase';
 import { onAuthStateChanged, User, signOut } from 'firebase/auth';
 import { WordDocument, WordStatus } from './types';
 
-// ソート用に初期インデックスを保持する型
 type WordWithOrder = WordDocument & { initialOrder: number };
 
 function App() {
-  // --- Auth State ---
+  // --- Auth & Basic State ---
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [isConfigVerified, setIsConfigVerified] = useState(false);
-
-  // --- App State ---
   const [words, setWords] = useState<WordWithOrder[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -38,10 +35,9 @@ function App() {
 
   // --- Search & Sort State ---
   const [searchTerm, setSearchTerm] = useState('');
-  // ユーザーが画面上で選択しているソート順
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest' | 'a-z' | 'z-a' | 'toeic-high' | 'toeic-low'>('newest');
   
-  // ★ 追加: 範囲指定フィルタ適用時の「基準となったソート順」を保存する変数
+  // フィルター適用時の「ベースの並び順」を保存する変数
   const [frozenSortOrder, setFrozenSortOrder] = useState<string | null>(null);
 
   // --- Filter State ---
@@ -63,10 +59,8 @@ function App() {
           setAuthLoading(false);
           return;
       }
-
       try {
           const profile = await getUserProfile(currentUser.uid);
-          
           if (profile?.settings) {
               let needsReload = false;
               if (profile.settings.language) {
@@ -95,7 +89,6 @@ function App() {
       } catch (error) {
           console.error("Failed to sync user settings", error);
       }
-
       setWords([]);
       setUser(currentUser);
       setAuthLoading(false);
@@ -106,16 +99,12 @@ function App() {
 
   const loadWords = useCallback(async () => {
     if (!user || !isConfigVerified) return;
-
     setLoading(true);
     const allWords = await fetchAllWords(user.uid); 
-    
-    // ロード時に連番（Newest=0, 1, 2...）を振り、これを「不変の順番」として扱います
     const indexedWords: WordWithOrder[] = allWords.map((word, index) => ({
       ...word,
       initialOrder: index
     }));
-
     setWords(indexedWords);
     setLoading(false);
   }, [user, isConfigVerified]);
@@ -177,69 +166,29 @@ function App() {
      setFilterDateFrom(''); setFilterDateTo(''); setFilterIndexFrom(''); setFilterIndexTo('');
   };
 
-  // --- ★ 追加: フィルター状態の監視と「基準ソート」の固定/解除 ---
+  // --- 範囲指定フィルター状態の監視 ---
   useEffect(() => {
     const hasIndexFilter = filterIndexFrom !== '' || filterIndexTo !== '';
-    
     if (hasIndexFilter) {
-        // フィルター開始時、まだ固定されていなければ、現在のソート順を「基準」として保存する
+        // フィルター開始時、現在のソート順を「基準」として保存
         if (frozenSortOrder === null) {
             setFrozenSortOrder(sortOrder);
         }
     } else {
-        // フィルターが解除されたら、固定を解除する
         setFrozenSortOrder(null);
     }
   }, [filterIndexFrom, filterIndexTo, sortOrder, frozenSortOrder]);
 
 
-  // --- ★ 修正: Filter -> Base Sort (Locked) -> Slice -> Display Sort のロジック ---
-  const processedWords = useMemo(() => {
+  // =========================================================
+  // ★ Phase 1: ベースリストの作成 (Range / Slice)
+  // ここで「範囲指定された単語リスト」を確定させ、変数(baseRangeWords)に保存します。
+  // 検索やカテゴリなどのフィルターはここではかけません。
+  // =========================================================
+  const baseRangeWords = useMemo(() => {
     let tempWords = [...words];
 
-    // =========================================================
-    // Step 1: 共通フィルタ (検索・カテゴリなど)
-    // =========================================================
-    tempWords = tempWords.filter(w => {
-        // Date
-        if (filterDateFrom || filterDateTo) {
-            const wordDate = w.createdAt?.seconds ? new Date(w.createdAt.seconds * 1000) : null;
-            if (!wordDate) return false;
-            
-            if (filterDateFrom) {
-                const fromDate = new Date(filterDateFrom);
-                fromDate.setHours(0, 0, 0, 0);
-                if (wordDate < fromDate) return false;
-            }
-            if (filterDateTo) {
-                const toDate = new Date(filterDateTo);
-                toDate.setHours(23, 59, 59, 999);
-                if (wordDate > toDate) return false;
-            }
-        }
-        // Search
-        if (searchTerm) {
-            const matchesSearch = w.english.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                                  w.meaning.includes(searchTerm);
-            if (!matchesSearch) return false;
-        }
-        // Others
-        if (filterCategory !== 'All' && w.category !== filterCategory) return false;
-        if (filterStatus !== 'All' && w.status !== filterStatus) return false;
-        if (filterPos !== 'All' && !w.partOfSpeech.includes(filterPos)) return false;
-        if (filterToeic !== 'All') {
-            const minScore = parseInt(filterToeic);
-            if ((w.toeicLevel || 0) < minScore) return false;
-        }
-        return true;
-    });
-
-
-    // =========================================================
-    // Step 2: ベースソート (Base Sort)
-    // 範囲指定がある場合は「保存された基準ソート」を使い、
-    // 切り取られる単語のメンツが変わらないようにします。
-    // =========================================================
+    // 1. ソート (ロックされた順序 または 現在の順序)
     const sortStrategy = frozenSortOrder || sortOrder;
 
     tempWords.sort((a, b) => {
@@ -254,24 +203,70 @@ function App() {
         }
     });
 
-
-    // =========================================================
-    // Step 3: 範囲切り取り (Slice)
-    // 「基準ソート」で並んだリストから指定範囲を切り取ります。
-    // =========================================================
+    // 2. 範囲切り取り (Slice)
     if (filterIndexFrom || filterIndexTo) {
         const start = filterIndexFrom ? Math.max(0, parseInt(filterIndexFrom) - 1) : 0;
         const end = filterIndexTo ? parseInt(filterIndexTo) : tempWords.length;
         
         tempWords = tempWords.slice(start, end);
     }
+    
+    // これが「保存されたリスト」となります
+    return tempWords;
+  }, [
+    words, 
+    frozenSortOrder, // ロックされたソート順が変わらない限り、ここの並びは維持される
+    sortOrder,       // ロックされていない場合はこれに従う
+    filterIndexFrom, 
+    filterIndexTo
+  ]);
 
 
-    // =========================================================
-    // Step 4: 表示用ソート (Display Sort)
-    // 範囲指定中（frozenSortOrderがある）の場合、手元にあるカードを
-    // ユーザーが現在選択している順序（sortOrder）に並び替えます。
-    // =========================================================
+  // =========================================================
+  // ★ Phase 2: 表示用データの作成 (Filter & Display Sort)
+  // Phase 1で作成された「baseRangeWords」に対して、検索などをかけます。
+  // これにより、全リストに戻ることなく「範囲内での絞り込み」が実現します。
+  // =========================================================
+  const processedWords = useMemo(() => {
+    // ★ 全リスト(words)ではなく、Phase 1で作ったリスト(baseRangeWords)を使う
+    let tempWords = [...baseRangeWords];
+
+    // 1. フィルタリング (検索・カテゴリ・日付など)
+    tempWords = tempWords.filter(w => {
+        // Search
+        if (searchTerm) {
+            const matchesSearch = w.english.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                                  w.meaning.includes(searchTerm);
+            if (!matchesSearch) return false;
+        }
+        // Date (範囲内の単語が日付条件を満たすか)
+        if (filterDateFrom || filterDateTo) {
+            const wordDate = w.createdAt?.seconds ? new Date(w.createdAt.seconds * 1000) : null;
+            if (!wordDate) return false;
+            if (filterDateFrom) {
+                const fromDate = new Date(filterDateFrom);
+                fromDate.setHours(0, 0, 0, 0);
+                if (wordDate < fromDate) return false;
+            }
+            if (filterDateTo) {
+                const toDate = new Date(filterDateTo);
+                toDate.setHours(23, 59, 59, 999);
+                if (wordDate > toDate) return false;
+            }
+        }
+        // Others
+        if (filterCategory !== 'All' && w.category !== filterCategory) return false;
+        if (filterStatus !== 'All' && w.status !== filterStatus) return false;
+        if (filterPos !== 'All' && !w.partOfSpeech.includes(filterPos)) return false;
+        if (filterToeic !== 'All') {
+            const minScore = parseInt(filterToeic);
+            if ((w.toeicLevel || 0) < minScore) return false;
+        }
+        return true;
+    });
+
+    // 2. 表示用ソート (Display Sort)
+    // 範囲指定中(frozenSortOrderあり)なら、絞り込まれた結果を現在の希望順に並べる
     if (frozenSortOrder) {
          tempWords.sort((a, b) => {
             switch (sortOrder) {
@@ -288,19 +283,18 @@ function App() {
 
     return tempWords;
   }, [
-    words, 
-    sortOrder,        // 表示ソートの変更を検知
-    frozenSortOrder,  // 基準ソートの変更を検知
-    filterIndexFrom, 
-    filterIndexTo, 
+    baseRangeWords,   // ★重要: Phase 1の結果が変わった時だけ再計算
     searchTerm, 
     filterCategory, 
     filterStatus, 
     filterPos, 
     filterToeic,
     filterDateFrom,
-    filterDateTo
+    filterDateTo,
+    sortOrder,        // 表示ソートの変更用
+    frozenSortOrder   // 条件分岐用
   ]);
+
 
   // --- Render ---
   if (authLoading || (user && !isConfigVerified)) {
