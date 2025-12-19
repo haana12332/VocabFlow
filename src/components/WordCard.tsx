@@ -7,6 +7,32 @@ interface WordCardProps {
 }
 
 export const WordCard: React.FC<WordCardProps> = ({ word, onClick }) => {
+
+  // 音声再生用のハンドラ
+  const handlePlayAudio = (e: React.MouseEvent) => {
+    e.stopPropagation(); // カード自体のクリックイベント（詳細表示）を阻止
+
+    // 再生中の音声をキャンセル（連打対策）
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(word.english);
+    utterance.lang = 'en-US';
+    utterance.rate = 1.0;
+
+    // 音声の選択 (Google US English などを優先)
+    const voices = window.speechSynthesis.getVoices();
+    const targetVoice = voices.find(v => v.name === 'Google US English') 
+                      || voices.find(v => v.name === 'Samantha')
+                      || voices.find(v => v.lang === 'en-US')
+                      || voices.find(v => v.lang.startsWith('en'));
+    
+    if (targetVoice) {
+      utterance.voice = targetVoice;
+    }
+
+    window.speechSynthesis.speak(utterance);
+  };
+
   return (
     <div 
         onClick={() => onClick(word)}
@@ -24,12 +50,12 @@ export const WordCard: React.FC<WordCardProps> = ({ word, onClick }) => {
       
       <div className="flex justify-between items-center mt-auto pt-2 border-t border-gray-200/50">
         <span className="text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded">{word.category}</span>
+        
+        {/* 音声再生ボタン */}
         <button 
-            className="w-8 h-8 rounded-full bg-indigo-50 text-indigo-500 flex items-center justify-center hover:bg-indigo-100 transition-colors"
-            onClick={(e) => {
-                e.stopPropagation();
-                window.open(word.pronunciationURL, '_blank');
-            }}
+            className="w-8 h-8 rounded-full bg-indigo-50 text-indigo-500 flex items-center justify-center hover:bg-indigo-100 transition-colors active:scale-95"
+            onClick={handlePlayAudio}
+            title="Listen"
         >
             <i className="fa-solid fa-volume-high text-xs"></i>
         </button>

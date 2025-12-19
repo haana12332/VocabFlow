@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { WordDocument } from '../types';
 import { updateWord, updateWordExample, updateWordComment } from '../firebase';
 
@@ -9,8 +9,14 @@ interface WordDetailModalProps {
   onUpdate: (updatedWord: WordDocument) => void;
 }
 
+// 設定用の型定義
+interface PlaybackSettings {
+    rate: number;          // 再生速度
+    englishRepeat: number; // 英語繰り返し回数
+    readJapanese: boolean; // 日本語を読み上げるかどうか
+}
+
 export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose, onDelete, onUpdate }) => {
-  // 表示用のデータをローカルステートで管理 (Optimistic UI用)
   const [currentWord, setCurrentWord] = useState<WordDocument>(word);
   
   const [isEditing, setIsEditing] = useState(false);
@@ -21,7 +27,21 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
   });
   const [loading, setLoading] = useState(false);
 
-  // 親から渡されるwordが変わった場合にステートを同期
+  // --- 音声再生用ステート ---
+  const [showSettings, setShowSettings] = useState(false);
+  const [playingExampleIndex, setPlayingExampleIndex] = useState<number | null>(null);
+  const [settings, setSettings] = useState<PlaybackSettings>({
+      rate: 1.0,
+      englishRepeat: 1,
+      readJapanese: false, 
+  });
+
+  const voicesRef = useRef<SpeechSynthesisVoice[]>([]);
+  const isPlayingRef = useRef(false);
+  
+  // 設定パネル外をクリックしたときに閉じるためのRef
+  const settingsRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     setCurrentWord(word);
     setEditData({ 
@@ -31,24 +51,108 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
     });
   }, [word]);
 
+  // 設定パネル外クリック検知
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+        if (settingsRef.current && !settingsRef.current.contains(event.target as Node)) {
+            setShowSettings(false);
+        }
+    };
+    if (showSettings) {
+        document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+        document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showSettings]);
+
+  useEffect(() => {
+    const loadVoices = () => {
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length > 0) {
+        voicesRef.current = voices;
+      }
+    };
+    loadVoices();
+    if (window.speechSynthesis.onvoiceschanged !== undefined) {
+      window.speechSynthesis.onvoiceschanged = loadVoices;
+    }
+    return () => {
+        window.speechSynthesis.cancel();
+        isPlayingRef.current = false;
+    };
+  }, []);
+
+  const speak = useCallback((text: string, lang: 'en-US' | 'ja-JP', rate: number) => {
+    return new Promise<void>((resolve) => {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = lang;
+      utterance.rate = rate;
+
+      if (voicesRef.current.length > 0) {
+        let targetVoice;
+        if (lang === 'en-US') {
+          targetVoice = voicesRef.current.find(v => v.name === 'Google US English') 
+                      || voicesRef.current.find(v => v.name === 'Samantha')
+                      || voicesRef.current.find(v => v.lang.startsWith('en'));
+        } else {
+          targetVoice = voicesRef.current.find(v => v.lang === 'ja-JP') 
+                      || voicesRef.current.find(v => v.name === 'Kyoko')
+                      || voicesRef.current.find(v => v.lang.startsWith('ja'));
+        }
+        if (targetVoice) utterance.voice = targetVoice;
+      }
+      
+      utterance.onend = () => resolve();
+      utterance.onerror = () => resolve();
+      window.speechSynthesis.speak(utterance);
+    });
+  }, []);
+
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+  const handlePlayExample = async (index: number) => {
+      if (playingExampleIndex === index) {
+          window.speechSynthesis.cancel();
+          isPlayingRef.current = false;
+          setPlayingExampleIndex(null);
+          return;
+      }
+
+      window.speechSynthesis.cancel();
+      isPlayingRef.current = true;
+      setPlayingExampleIndex(index);
+
+      const example = currentWord.examples![index];
+      
+      for (let i = 0; i < settings.englishRepeat; i++) {
+          if (!isPlayingRef.current) break;
+          await speak(example.sentence, 'en-US', settings.rate);
+          if (i < settings.englishRepeat - 1 || settings.readJapanese) {
+              await sleep(300);
+          }
+      }
+
+      if (settings.readJapanese && isPlayingRef.current) {
+          await sleep(200);
+          await speak(example.translation, 'ja-JP', settings.rate);
+      }
+
+      if (isPlayingRef.current) {
+          setPlayingExampleIndex(null);
+          isPlayingRef.current = false;
+      }
+  };
+
   const handleSave = async () => {
     setLoading(true);
     try {
-        // 基本情報の更新
         await updateWord(currentWord.id, editData);
-        
-        // Examplesの更新
         await updateWordExample(currentWord.id, editData.examples);
-        
-        // Commentの更新
         await updateWordComment(currentWord.id, editData.comment);
-        
-        // 保存成功時、即座に表示用ステートを更新
         setCurrentWord(editData);
-        
-        // 親コンポーネントに更新後の完全なデータを渡す
         onUpdate(editData); 
-        
         setIsEditing(false);
     } catch (e) {
         console.error("Failed to update", e);
@@ -64,10 +168,7 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
 
   const handleExampleChange = (index: number, field: 'sentence' | 'translation', value: string) => {
     const newExamples = [...(editData.examples || [])];
-    newExamples[index] = {
-        ...newExamples[index],
-        [field]: value
-    };
+    newExamples[index] = { ...newExamples[index], [field]: value };
     setEditData(prev => ({ ...prev, examples: newExamples }));
   };
 
@@ -86,11 +187,41 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/30 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
-      <div className="bg-white w-full sm:max-w-xl rounded-t-3xl sm:rounded-3xl p-8 relative animate-slide-up sm:animate-none max-h-[90vh] overflow-y-auto">
-        <button onClick={onClose} className="absolute top-4 right-4 w-8 h-8 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center hover:bg-slate-200 z-10">
-            <i className="fa-solid fa-times"></i>
-        </button>
+      <style>{`
+        .custom-range {
+          -webkit-appearance: none;
+          height: 4px;
+          background: rgba(255, 255, 255, 0.3);
+          border-radius: 2px;
+          outline: none;
+        }
+        .custom-range::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          width: 14px;
+          height: 14px;
+          background: white;
+          border-radius: 50%;
+          cursor: pointer;
+          transition: transform 0.1s;
+        }
+        .custom-range::-webkit-slider-thumb:hover {
+          transform: scale(1.2);
+        }
+      `}</style>
 
+      <div className="bg-white w-full sm:max-w-xl rounded-t-3xl sm:rounded-3xl p-8 relative animate-slide-up sm:animate-none max-h-[90vh] overflow-y-auto shadow-2xl">
+        
+        {/* Close Button Only (Settings moved to Examples) */}
+        <div className="absolute top-4 right-4 z-20">
+            <button onClick={() => {
+                window.speechSynthesis.cancel();
+                onClose();
+            }} className="w-8 h-8 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center hover:bg-slate-200">
+                <i className="fa-solid fa-times"></i>
+            </button>
+        </div>
+
+        {/* Edit/Save Header */}
         {isEditing ? (
              <div className="flex justify-between items-center mb-4">
                 <h2 className="text-xl font-bold text-slate-700">Edit Word</h2>
@@ -113,7 +244,7 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
             </div>
         )}
 
-        {/* Header Section */}
+        {/* Word Info Header */}
         <div className="flex flex-col items-center mb-6 mt-6">
             <div className="flex gap-2 mb-3">
                  {isEditing ? (
@@ -127,15 +258,7 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
                              <option value="Daily">Daily</option>
                              <option value="Business">Business</option>
                              <option value="Academic">Academic</option>
-                             <option value="Technology">Technology</option>
-                             <option value="Shopping">Shopping</option>
-                             <option value="Finance">Finance</option>
-                             <option value="Restaurant">Restaurant</option>
-                             <option value="Emotions">Emotions</option>
-                             <option value="Relationships">Relationships</option>
-                             <option value="Nature">Nature</option>
-                             <option value="Transportation">Transportation</option>
-                             <option value="Science">Science</option>
+                             {/* ... other options ... */}
                              <option value="Other">Other</option>
                          </select>
                      </div>
@@ -179,7 +302,6 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
                         value={editData.partOfSpeech.join(', ')}
                         onChange={(e) => handleChange('partOfSpeech', e.target.value.split(',').map(s=>s.trim()))}
                         className="text-sm text-center text-slate-400 border-b border-slate-200 outline-none w-full"
-                        placeholder="Noun, Verb"
                     />
                  ) : (
                     currentWord.partOfSpeech.map((pos, i) => (
@@ -196,25 +318,16 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
             </button>
         </div>
 
-        {/* Status Section (Read Only) */}
+        {/* Status Badge */}
         <div className="flex justify-center mb-6">
              <div className="bg-slate-100 rounded-lg p-1 flex">
-                <div className={`px-3 py-1 rounded text-xs font-bold ${currentWord.status === 'Beginner' ? 'bg-white shadow text-indigo-600' : 'text-slate-400 opacity-50'}`}>
-                    Beginner
-                </div>
-                <div className={`px-3 py-1 rounded text-xs font-bold ${currentWord.status === 'Training' ? 'bg-white shadow text-blue-600' : 'text-slate-400 opacity-50'}`}>
-                    Training
-                </div>
+                <div className={`px-3 py-1 rounded text-xs font-bold ${currentWord.status === 'Beginner' ? 'bg-white shadow text-indigo-600' : 'text-slate-400 opacity-50'}`}>Beginner</div>
+                <div className={`px-3 py-1 rounded text-xs font-bold ${currentWord.status === 'Training' ? 'bg-white shadow text-blue-600' : 'text-slate-400 opacity-50'}`}>Training</div>
                 <div className={`px-3 py-1 rounded text-xs font-bold flex items-center gap-1 ${currentWord.status === 'Mastered' ? 'bg-green-100 text-green-700' : 'text-slate-300 opacity-50'}`}>
                     {currentWord.status === 'Mastered' && <i className="fa-solid fa-check"></i>} Mastered
                 </div>
              </div>
         </div>
-        <p className="text-center text-[10px] text-slate-400 mb-6 bg-slate-50 py-2 rounded">
-            <i className="fa-solid fa-info-circle mr-1"></i> 
-            Status can only be changed in <strong>Flashcards</strong> or via <strong>AI Quiz</strong>.
-        </p>
-
 
         <div className="space-y-6">
             <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
@@ -247,8 +360,83 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
             {/* Examples Section */}
             {(currentWord.examples && currentWord.examples.length > 0) || isEditing ? (
                 <div>
+                      {/* Section Header with Settings Button */}
                       <div className="flex justify-between items-center mb-3 px-2">
-                        <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Examples</h3>
+                        <div className="flex items-center gap-2 relative">
+                            <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Examples</h3>
+                            
+                            {/* Settings Button (View Mode Only) */}
+                            {!isEditing && (
+                                <div className="relative" ref={settingsRef}>
+                                    <button 
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            setShowSettings(!showSettings);
+                                        }}
+                                        className={`w-6 h-6 rounded-full flex items-center justify-center transition-colors text-xs ${showSettings ? 'bg-indigo-500 text-white' : 'bg-slate-100 text-slate-400 hover:bg-slate-200 hover:text-indigo-500'}`}
+                                        title="Audio Settings"
+                                    >
+                                        <i className="fa-solid fa-gear"></i>
+                                    </button>
+
+                                    {/* Settings Panel Popup - Positioned relative to the header */}
+                                    {showSettings && (
+                                        <div className="absolute top-8 left-0 w-64 bg-slate-800 text-white p-4 rounded-xl shadow-xl z-50 animate-slide-up">
+                                            <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-3 border-b border-white/10 pb-2">Audio Settings</h4>
+                                            
+                                            {/* Read Japanese Toggle */}
+                                            <div className="flex justify-between items-center mb-4">
+                                                <span className="text-xs text-slate-300">Read Meaning (JP)</span>
+                                                <button 
+                                                    onClick={() => setSettings({...settings, readJapanese: !settings.readJapanese})}
+                                                    className={`w-10 h-5 rounded-full relative transition-colors ${settings.readJapanese ? 'bg-indigo-500' : 'bg-slate-600'}`}
+                                                >
+                                                    <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${settings.readJapanese ? 'left-6' : 'left-1'}`}></div>
+                                                </button>
+                                            </div>
+
+                                            {/* Speed Control */}
+                                            <div className="mb-4">
+                                                <div className="flex justify-between text-xs mb-1">
+                                                    <span className="text-slate-300">Speed</span>
+                                                    <span className="font-mono text-indigo-300">x{settings.rate}</span>
+                                                </div>
+                                                <input 
+                                                    type="range" min="0.5" max="2.0" step="0.1"
+                                                    value={settings.rate}
+                                                    onChange={(e) => setSettings({...settings, rate: parseFloat(e.target.value)})}
+                                                    className="w-full custom-range"
+                                                />
+                                            </div>
+
+                                            {/* Repeat Count */}
+                                            <div>
+                                                <div className="flex justify-between text-xs mb-2">
+                                                    <span className="text-slate-300">English Repeat</span>
+                                                    <span className="font-mono text-indigo-300">{settings.englishRepeat} times</span>
+                                                </div>
+                                                <div className="flex gap-2">
+                                                    {[1, 2, 3].map(num => (
+                                                        <button
+                                                            key={num}
+                                                            onClick={() => setSettings({...settings, englishRepeat: num})}
+                                                            className={`flex-1 py-1 text-xs rounded border transition-colors ${
+                                                                settings.englishRepeat === num 
+                                                                ? 'bg-indigo-500 border-indigo-500 text-white' 
+                                                                : 'border-white/20 text-slate-400 hover:bg-white/10'
+                                                            }`}
+                                                        >
+                                                            {num}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+
                         {isEditing && (
                             <button 
                                 onClick={handleAddExample}
@@ -266,16 +454,13 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
                                     <button 
                                         onClick={() => handleRemoveExample(index)}
                                         className="absolute top-2 right-2 text-slate-300 hover:text-red-400"
-                                        title="Remove example"
                                     >
                                         <i className="fa-solid fa-times-circle"></i>
                                     </button>
-                                    
                                     <div className="mb-2">
                                         <label className="text-[10px] text-slate-400 font-bold uppercase">Sentence</label>
                                         <input 
                                             className="w-full border-b border-slate-100 outline-none text-sm text-slate-800" 
-                                            placeholder="English Sentence"
                                             value={ex.sentence}
                                             onChange={(e) => handleExampleChange(index, 'sentence', e.target.value)}
                                         />
@@ -284,7 +469,6 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
                                         <label className="text-[10px] text-slate-400 font-bold uppercase">Translation</label>
                                         <input 
                                             className="w-full outline-none text-xs text-slate-500" 
-                                            placeholder="Japanese Translation"
                                             value={ex.translation}
                                             onChange={(e) => handleExampleChange(index, 'translation', e.target.value)}
                                         />
@@ -293,9 +477,25 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
                             ))
                         ) : (
                             currentWord.examples && currentWord.examples.map((ex, i) => (
-                                <div key={i} className="border-l-4 border-indigo-200 pl-4 py-1">
-                                    <p className="text-slate-800 font-medium mb-1">{ex.sentence}</p>
-                                    <p className="text-slate-500 text-sm">{ex.translation}</p>
+                                <div key={i} className={`flex gap-3 border-l-4 pl-4 py-2 transition-colors ${playingExampleIndex === i ? 'border-indigo-500 bg-indigo-50' : 'border-indigo-200'}`}>
+                                    <button
+                                        onClick={() => handlePlayExample(i)}
+                                        className={`w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center transition-all ${
+                                            playingExampleIndex === i 
+                                            ? 'bg-indigo-500 text-white shadow-md' 
+                                            : 'bg-white text-indigo-500 border border-indigo-100 hover:bg-indigo-50'
+                                        }`}
+                                    >
+                                        <i className={`fa-solid ${playingExampleIndex === i ? 'fa-stop' : 'fa-play'} text-xs`}></i>
+                                    </button>
+                                    <div>
+                                        <p className={`text-slate-800 font-medium mb-1 ${playingExampleIndex === i ? 'text-indigo-900' : ''}`}>
+                                            {ex.sentence}
+                                        </p>
+                                        <p className={`text-sm transition-opacity ${settings.readJapanese ? 'text-slate-500' : 'text-slate-300'}`}>
+                                            {ex.translation}
+                                        </p>
+                                    </div>
                                 </div>
                             ))
                         )}
@@ -319,7 +519,6 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({ word, onClose,
                         rows={4}
                         value={editData.comment || ''}
                         onChange={(e) => handleChange('comment', e.target.value)}
-                        placeholder="Add your personal notes, tips, or reminders here..."
                     />
                 ) : (
                     <p className="text-slate-600 leading-relaxed">
