@@ -16,19 +16,11 @@ interface PlaybackBlock {
   label: string;
 }
 
-// 設定: Repeatを削除し、Rateのみ保持
 interface PlaybackSettings {
-  flipInterval: number; // ブロック間の待機時間
+  flipInterval: number;
   timeline: PlaybackBlock[];
-  
-  // 単語・日本語用の設定 (Repeat削除済み)
-  word: {
-      rate: number;
-  };
-  // 例文用の設定 (Repeat削除済み)
-  example: {
-      rate: number;
-  };
+  word: { rate: number; };
+  example: { rate: number; };
 }
 
 export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, onUpdateStatus }) => {
@@ -46,26 +38,23 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
 
   const [isPlaying, setIsPlaying] = useState(false);
   
-  // 初期設定 (Repeatプロパティなし)
   const [settings, setSettings] = useState<PlaybackSettings>({
     flipInterval: 1.0,
     timeline: defaultTimeline,
-    word: {
-        rate: 1.0,
-    },
-    example: {
-        rate: 1.0,
-    }
+    word: { rate: 1.0 },
+    example: { rate: 1.0 }
   });
   
   const dragItem = useRef<number | null>(null);
   const dragOverItem = useRef<number | null>(null);
+  
   const isPlayingRef = useRef(false);
   const settingsRef = useRef(settings);
   const voicesRef = useRef<SpeechSynthesisVoice[]>([]);
+  const isFlippedRef = useRef(isFlipped);
+
   const currentWord = words[currentIndex];
 
-  // Ref同期
   useEffect(() => {
     isPlayingRef.current = isPlaying;
     if (!isPlaying) window.speechSynthesis.cancel();
@@ -75,7 +64,10 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
     settingsRef.current = settings;
   }, [settings]);
 
-  // 音声リストの読み込み
+  useEffect(() => {
+    isFlippedRef.current = isFlipped;
+  }, [isFlipped]);
+
   useEffect(() => {
     const loadVoices = () => {
       const voices = window.speechSynthesis.getVoices();
@@ -87,7 +79,7 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
     }
   }, []);
 
-  // --- 音声再生用ヘルパー (OSごとの最適化済み) ---
+  // --- 音声再生用ヘルパー ---
   const speak = useCallback((text: string, lang: 'en-US' | 'ja-JP', rate: number) => {
     return new Promise<void>((resolve) => {
       window.speechSynthesis.cancel();
@@ -98,9 +90,7 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
 
       if (voicesRef.current.length > 0) {
         let targetVoice;
-        
         if (lang === 'en-US') {
-          // 英語音声の優先順位: Google -> Windows (Zira/David) -> iOS (Samantha) -> その他
           targetVoice = 
             voicesRef.current.find(v => v.name === 'Google US English') 
             || voicesRef.current.find(v => v.name.includes('Microsoft Zira')) 
@@ -108,9 +98,7 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
             || voicesRef.current.find(v => v.name === 'Samantha') 
             || voicesRef.current.find(v => v.lang === 'en-US')
             || voicesRef.current.find(v => v.lang.startsWith('en'));
-
         } else {
-          // 日本語音声の優先順位: Google -> Windows (Haruka/Ichiro) -> iOS (Kyoko) -> その他
           targetVoice = 
             voicesRef.current.find(v => v.name === 'Google 日本語') 
             || voicesRef.current.find(v => v.name.includes('Microsoft Haruka')) 
@@ -120,18 +108,11 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
             || voicesRef.current.find(v => v.lang === 'ja-JP')
             || voicesRef.current.find(v => v.lang.startsWith('ja'));
         }
-
-        if (targetVoice) {
-          utterance.voice = targetVoice;
-        }
+        if (targetVoice) utterance.voice = targetVoice;
       }
       
       utterance.onend = () => resolve();
-      utterance.onerror = (e) => {
-        console.error("Speech Error", e);
-        resolve(); 
-      };
-
+      utterance.onerror = (e) => { console.error("Speech Error", e); resolve(); };
       window.speechSynthesis.speak(utterance);
     });
   }, []);
@@ -149,6 +130,7 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
     setSettings(prev => ({ ...prev, timeline: prev.timeline.filter(b => b.uuid !== uuid) }));
   };
 
+  // ドラッグ＆ドロップ（PC用）
   const handleSort = () => {
     if (dragItem.current === null || dragOverItem.current === null) return;
     const _timeline = [...settings.timeline];
@@ -160,14 +142,33 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
     setSettings(prev => ({ ...prev, timeline: _timeline }));
   };
 
-  // --- 自動再生ロジック (Repeatループ削除済み) ---
+  // ボタンによる並べ替え（スマホ用）
+  const moveBlock = (index: number, direction: 'up' | 'down') => {
+    const _timeline = [...settings.timeline];
+    if (direction === 'up') {
+        if (index === 0) return;
+        const temp = _timeline[index];
+        _timeline[index] = _timeline[index - 1];
+        _timeline[index - 1] = temp;
+    } else {
+        if (index === _timeline.length - 1) return;
+        const temp = _timeline[index];
+        _timeline[index] = _timeline[index + 1];
+        _timeline[index + 1] = temp;
+    }
+    setSettings(prev => ({ ...prev, timeline: _timeline }));
+  };
+
+  // --- 自動再生ロジック ---
   useEffect(() => {
     let isMounted = true;
 
     const ensureFlipState = async (shouldBeFlipped: boolean) => {
-      if (isFlipped !== shouldBeFlipped) {
+      if (isFlippedRef.current !== shouldBeFlipped) {
          if (!isMounted || !isPlayingRef.current) return;
+         
          setIsFlipped(shouldBeFlipped);
+         isFlippedRef.current = shouldBeFlipped;
          await sleep(600);
       }
     };
@@ -183,14 +184,12 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
           case 'english':
             await ensureFlipState(false);
             if (!isMounted || !isPlayingRef.current) return;
-            // 単語再生 (1回のみ)
             await speak(currentWord.english, 'en-US', s.word.rate);
             break;
 
           case 'japanese':
             await ensureFlipState(true);
             if (!isMounted || !isPlayingRef.current) return;
-            // 日本語再生 (1回のみ)
             await speak(currentWord.meaning, 'ja-JP', s.word.rate);
             break;
 
@@ -198,30 +197,29 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
             await ensureFlipState(true);
             if (!isMounted || !isPlayingRef.current) return;
             if (currentWord.examples && currentWord.examples.length > 0) {
-              // 例文再生 (最大2つを1回ずつ再生)
               const examplesToPlay = currentWord.examples.slice(0, 2);
               for (const ex of examplesToPlay) {
                   if (!isMounted || !isPlayingRef.current) return;
                   await speak(ex.sentence, 'en-US', s.example.rate);
-                  await sleep(400); // 例文間の間隔
+                  await sleep(400); 
               }
             }
             break;
         }
-        // ブロック間の待機時間
         await sleep(s.flipInterval * 1000);
       }
 
-      // 次のカードへ
       if (!isMounted || !isPlayingRef.current) return;
       if (currentIndex < words.length - 1) {
         setCurrentIndex(prev => prev + 1);
         setIsFlipped(false);
+        isFlippedRef.current = false;
         setShowButtons(false);
         setTimeout(() => setShowButtons(true), 500);
       } else {
         setIsPlaying(false);
         setIsFlipped(false);
+        isFlippedRef.current = false;
       }
     };
 
@@ -234,7 +232,7 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentIndex, isPlaying]);
 
-  // --- Navigation & Key Handlers ---
+  // --- イベントハンドラ ---
   const navigateNext = useCallback(() => {
     if (currentIndex < words.length - 1) {
       setCurrentIndex(prev => prev + 1);
@@ -349,84 +347,112 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
 
           {/* Settings Panel */}
           {showSettings && (
-              <div 
-                  className="absolute top-[-60px] left-0 sm:left-32 z-[60] w-full sm:w-80 bg-slate-800/95 backdrop-blur-xl rounded-2xl border border-white/10 shadow-2xl p-4 text-white fade-in-element flex flex-col max-h-[600px]"
-                  onClick={(e) => e.stopPropagation()}
-              >
-                  <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 border-b border-white/10 pb-2">Custom Playback</h4>
-                  
-                  {/* Timeline Buttons */}
-                  <div className="flex gap-2 mb-4">
-                      <button onClick={() => addBlock('english')} className="flex-1 py-1.5 bg-indigo-500/20 border border-indigo-500/50 rounded-lg text-xs font-bold text-indigo-300 hover:bg-indigo-500 hover:text-white transition-all">+ Word</button>
-                      <button onClick={() => addBlock('japanese')} className="flex-1 py-1.5 bg-slate-500/20 border border-slate-500/50 rounded-lg text-xs font-bold text-slate-300 hover:bg-slate-500 hover:text-white transition-all">+ Meaning</button>
-                      <button onClick={() => addBlock('example')} className="flex-1 py-1.5 bg-emerald-500/20 border border-emerald-500/50 rounded-lg text-xs font-bold text-emerald-300 hover:bg-emerald-600 hover:text-white transition-all">+ Ex</button>
-                  </div>
+              <>
+                  {/* ★重要: パネル外タップで閉じるための透明なバックドロップ */}
+                  <div 
+                    className="fixed inset-0 z-[55] bg-transparent"
+                    onClick={() => setShowSettings(false)}
+                  />
 
-                  {/* Timeline List */}
-                  <div className="flex-1 overflow-y-auto card-scrollbar min-h-[120px] mb-4 bg-slate-900/50 rounded-xl p-2 border border-white/5">
-                    {settings.timeline.length === 0 ? (
-                        <div className="h-full flex items-center justify-center text-slate-500 text-xs italic">Tap buttons to add</div>
-                    ) : (
-                        <div className="space-y-2">
-                        {settings.timeline.map((block, index) => (
-                            <div 
-                                key={block.uuid}
-                                className={`flex items-center justify-between p-2 rounded-lg border shadow-sm cursor-move active:scale-[0.98] transition-transform ${getBlockColor(block.type)}`}
-                                draggable
-                                onDragStart={() => (dragItem.current = index)}
-                                onDragEnter={() => (dragOverItem.current = index)}
-                                onDragEnd={handleSort}
-                                onDragOver={(e) => e.preventDefault()}
-                            >
-                                <div className="flex items-center gap-3">
-                                    <i className="fa-solid fa-grip-lines text-white/50 text-xs cursor-grab"></i>
-                                    <span className="text-xs font-bold text-white">{block.label}</span>
+                  {/* パネル本体 */}
+                  <div 
+                      className="absolute top-[-60px] left-0 sm:left-32 z-[60] w-full sm:w-80 bg-slate-800/95 backdrop-blur-xl rounded-2xl border border-white/10 shadow-2xl p-4 text-white fade-in-element flex flex-col max-h-[600px]"
+                      onClick={(e) => e.stopPropagation()} // パネル内のクリックで閉じないようにする
+                  >
+                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 border-b border-white/10 pb-2">Custom Playback</h4>
+                      
+                      {/* Timeline Buttons */}
+                      <div className="flex gap-2 mb-4">
+                          <button onClick={() => addBlock('english')} className="flex-1 py-1.5 bg-indigo-500/20 border border-indigo-500/50 rounded-lg text-xs font-bold text-indigo-300 hover:bg-indigo-500 hover:text-white transition-all">+ Word</button>
+                          <button onClick={() => addBlock('japanese')} className="flex-1 py-1.5 bg-slate-500/20 border border-slate-500/50 rounded-lg text-xs font-bold text-slate-300 hover:bg-slate-500 hover:text-white transition-all">+ Meaning</button>
+                          <button onClick={() => addBlock('example')} className="flex-1 py-1.5 bg-emerald-500/20 border border-emerald-500/50 rounded-lg text-xs font-bold text-emerald-300 hover:bg-emerald-600 hover:text-white transition-all">+ Ex</button>
+                      </div>
+
+                      {/* Timeline List (Sortable) */}
+                      <div className="flex-1 overflow-y-auto card-scrollbar min-h-[140px] mb-4 bg-slate-900/50 rounded-xl p-2 border border-white/5">
+                        {settings.timeline.length === 0 ? (
+                            <div className="h-full flex items-center justify-center text-slate-500 text-xs italic">Tap buttons to add</div>
+                        ) : (
+                            <div className="space-y-2">
+                            {settings.timeline.map((block, index) => (
+                                <div 
+                                    key={block.uuid}
+                                    className={`flex items-center justify-between p-2 rounded-lg border shadow-sm cursor-move active:scale-[0.98] transition-transform ${getBlockColor(block.type)}`}
+                                    draggable
+                                    onDragStart={() => (dragItem.current = index)}
+                                    onDragEnter={() => (dragOverItem.current = index)}
+                                    onDragEnd={handleSort}
+                                    onDragOver={(e) => e.preventDefault()}
+                                >
+                                    <div className="flex items-center gap-3">
+                                        <i className="fa-solid fa-grip-lines text-white/50 text-xs cursor-grab"></i>
+                                        <span className="text-xs font-bold text-white">{block.label}</span>
+                                    </div>
+                                    
+                                    <div className="flex items-center gap-1">
+                                        {/* ★スマホ用 並べ替えボタン (ドラッグの代わり) */}
+                                        <div className="flex flex-col mr-2 gap-0.5">
+                                            <button 
+                                                onClick={(e) => { e.stopPropagation(); moveBlock(index, 'up'); }}
+                                                className="w-5 h-4 bg-white/10 hover:bg-white/30 rounded flex items-center justify-center text-[8px] disabled:opacity-30"
+                                                disabled={index === 0}
+                                            >
+                                                <i className="fa-solid fa-chevron-up"></i>
+                                            </button>
+                                            <button 
+                                                onClick={(e) => { e.stopPropagation(); moveBlock(index, 'down'); }}
+                                                className="w-5 h-4 bg-white/10 hover:bg-white/30 rounded flex items-center justify-center text-[8px] disabled:opacity-30"
+                                                disabled={index === settings.timeline.length - 1}
+                                            >
+                                                <i className="fa-solid fa-chevron-down"></i>
+                                            </button>
+                                        </div>
+
+                                        <button onClick={(e) => { e.stopPropagation(); removeBlock(block.uuid); }} className="w-6 h-6 rounded-full bg-black/20 text-white/70 hover:bg-red-500 hover:text-white flex items-center justify-center transition-colors">
+                                            <i className="fa-solid fa-xmark text-[10px]"></i>
+                                        </button>
+                                    </div>
                                 </div>
-                                <button onClick={(e) => { e.stopPropagation(); removeBlock(block.uuid); }} className="w-6 h-6 rounded-full bg-black/20 text-white/70 hover:bg-red-500 hover:text-white flex items-center justify-center transition-colors">
-                                    <i className="fa-solid fa-xmark text-[10px]"></i>
-                                </button>
+                            ))}
                             </div>
-                        ))}
+                        )}
+                      </div>
+
+                      {/* Settings */}
+                      <div className="space-y-3 pt-2 border-t border-white/10 overflow-y-auto card-scrollbar max-h-[250px] pr-2">
+                        {/* Word Settings */}
+                        <div className="bg-indigo-500/10 border border-indigo-500/30 p-3 rounded-lg">
+                            <p className="text-xs font-bold text-indigo-300 mb-2 uppercase">Word Settings</p>
+                            <div className="mb-1">
+                                <div className="flex justify-between text-[10px] mb-1 text-slate-300">
+                                    <span>Speed</span><span className="font-mono text-indigo-200">x{settings.word.rate}</span>
+                                </div>
+                                <input type="range" min="0.5" max="2.0" step="0.1" value={settings.word.rate} onChange={(e) => setSettings({...settings, word: {...settings.word, rate: parseFloat(e.target.value)}})} className="w-full custom-range" />
+                            </div>
                         </div>
-                    )}
+
+                        {/* Example Settings */}
+                        <div className="bg-emerald-500/10 border border-emerald-500/30 p-3 rounded-lg">
+                            <p className="text-xs font-bold text-emerald-300 mb-2 uppercase">Example Settings</p>
+                            <div className="mb-1">
+                                <div className="flex justify-between text-[10px] mb-1 text-slate-300">
+                                    <span>Speed</span><span className="font-mono text-emerald-200">x{settings.example.rate}</span>
+                                </div>
+                                <input type="range" min="0.5" max="2.0" step="0.1" value={settings.example.rate} onChange={(e) => setSettings({...settings, example: {...settings.example, rate: parseFloat(e.target.value)}})} className="w-full custom-range" />
+                            </div>
+                        </div>
+
+                        {/* Global Settings */}
+                        <div className="px-1">
+                            <div className="flex justify-between text-xs mb-1">
+                                <span className="text-slate-400">Delay</span>
+                                <span className="font-mono text-white">{settings.flipInterval}s</span>
+                            </div>
+                            <input type="range" min="0" max="3.0" step="0.2" value={settings.flipInterval} onChange={(e) => setSettings({...settings, flipInterval: parseFloat(e.target.value)})} className="w-full custom-range" />
+                        </div>
+                      </div>
                   </div>
-
-                  {/* Individual Settings (Rate only) */}
-                  <div className="space-y-3 pt-2 border-t border-white/10 overflow-y-auto card-scrollbar max-h-[250px] pr-2">
-                    
-                    {/* Word Settings */}
-                    <div className="bg-indigo-500/10 border border-indigo-500/30 p-3 rounded-lg">
-                        <p className="text-xs font-bold text-indigo-300 mb-2 uppercase">Word Settings</p>
-                        <div className="mb-1">
-                            <div className="flex justify-between text-[10px] mb-1 text-slate-300">
-                                <span>Speed</span><span className="font-mono text-indigo-200">x{settings.word.rate}</span>
-                            </div>
-                            <input type="range" min="0.5" max="2.0" step="0.1" value={settings.word.rate} onChange={(e) => setSettings({...settings, word: {...settings.word, rate: parseFloat(e.target.value)}})} className="w-full custom-range" />
-                        </div>
-                    </div>
-
-                    {/* Example Settings */}
-                    <div className="bg-emerald-500/10 border border-emerald-500/30 p-3 rounded-lg">
-                        <p className="text-xs font-bold text-emerald-300 mb-2 uppercase">Example Settings</p>
-                        <div className="mb-1">
-                            <div className="flex justify-between text-[10px] mb-1 text-slate-300">
-                                <span>Speed</span><span className="font-mono text-emerald-200">x{settings.example.rate}</span>
-                            </div>
-                            <input type="range" min="0.5" max="2.0" step="0.1" value={settings.example.rate} onChange={(e) => setSettings({...settings, example: {...settings.example, rate: parseFloat(e.target.value)}})} className="w-full custom-range" />
-                        </div>
-                    </div>
-
-                    {/* Global Settings */}
-                    <div className="px-1">
-                        <div className="flex justify-between text-xs mb-1">
-                            <span className="text-slate-400">Delay</span>
-                            <span className="font-mono text-white">{settings.flipInterval}s</span>
-                        </div>
-                        <input type="range" min="0" max="3.0" step="0.2" value={settings.flipInterval} onChange={(e) => setSettings({...settings, flipInterval: parseFloat(e.target.value)})} className="w-full custom-range" />
-                    </div>
-
-                  </div>
-              </div>
+              </>
           )}
 
           {/* Main Card */}
