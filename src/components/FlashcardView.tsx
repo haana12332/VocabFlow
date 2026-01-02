@@ -16,20 +16,18 @@ interface PlaybackBlock {
   label: string;
 }
 
-// 設定を詳細化
+// 設定: Repeatを削除し、Rateのみ保持
 interface PlaybackSettings {
-  flipInterval: number;  // ブロック間の待機時間 (共通)
+  flipInterval: number; // ブロック間の待機時間
   timeline: PlaybackBlock[];
   
-  // 単語用の設定
+  // 単語・日本語用の設定 (Repeat削除済み)
   word: {
       rate: number;
-      repeat: number;
   };
-  // 例文用の設定
+  // 例文用の設定 (Repeat削除済み)
   example: {
       rate: number;
-      repeat: number;
   };
 }
 
@@ -47,16 +45,16 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
   ];
 
   const [isPlaying, setIsPlaying] = useState(false);
+  
+  // 初期設定 (Repeatプロパティなし)
   const [settings, setSettings] = useState<PlaybackSettings>({
     flipInterval: 1.0,
     timeline: defaultTimeline,
     word: {
         rate: 1.0,
-        repeat: 1
     },
     example: {
-        rate: 1.0,  // 例文は少し速くしたい、などの要望に対応可能
-        repeat: 1
+        rate: 1.0,
     }
   });
   
@@ -67,6 +65,7 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
   const voicesRef = useRef<SpeechSynthesisVoice[]>([]);
   const currentWord = words[currentIndex];
 
+  // Ref同期
   useEffect(() => {
     isPlayingRef.current = isPlaying;
     if (!isPlaying) window.speechSynthesis.cancel();
@@ -76,6 +75,7 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
     settingsRef.current = settings;
   }, [settings]);
 
+  // 音声リストの読み込み
   useEffect(() => {
     const loadVoices = () => {
       const voices = window.speechSynthesis.getVoices();
@@ -87,7 +87,58 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
     }
   }, []);
 
-  // --- ヘルパー関数 ---
+  // --- 音声再生用ヘルパー (OSごとの最適化済み) ---
+  const speak = useCallback((text: string, lang: 'en-US' | 'ja-JP', rate: number) => {
+    return new Promise<void>((resolve) => {
+      window.speechSynthesis.cancel();
+
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = lang;
+      utterance.rate = rate;
+
+      if (voicesRef.current.length > 0) {
+        let targetVoice;
+        
+        if (lang === 'en-US') {
+          // 英語音声の優先順位: Google -> Windows (Zira/David) -> iOS (Samantha) -> その他
+          targetVoice = 
+            voicesRef.current.find(v => v.name === 'Google US English') 
+            || voicesRef.current.find(v => v.name.includes('Microsoft Zira')) 
+            || voicesRef.current.find(v => v.name.includes('Microsoft David')) 
+            || voicesRef.current.find(v => v.name === 'Samantha') 
+            || voicesRef.current.find(v => v.lang === 'en-US')
+            || voicesRef.current.find(v => v.lang.startsWith('en'));
+
+        } else {
+          // 日本語音声の優先順位: Google -> Windows (Haruka/Ichiro) -> iOS (Kyoko) -> その他
+          targetVoice = 
+            voicesRef.current.find(v => v.name === 'Google 日本語') 
+            || voicesRef.current.find(v => v.name.includes('Microsoft Haruka')) 
+            || voicesRef.current.find(v => v.name.includes('Microsoft Ichiro')) 
+            || voicesRef.current.find(v => v.name === 'Kyoko') 
+            || voicesRef.current.find(v => v.name === 'Otoya') 
+            || voicesRef.current.find(v => v.lang === 'ja-JP')
+            || voicesRef.current.find(v => v.lang.startsWith('ja'));
+        }
+
+        if (targetVoice) {
+          utterance.voice = targetVoice;
+        }
+      }
+      
+      utterance.onend = () => resolve();
+      utterance.onerror = (e) => {
+        console.error("Speech Error", e);
+        resolve(); 
+      };
+
+      window.speechSynthesis.speak(utterance);
+    });
+  }, []);
+
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+  // --- 設定パネル操作 ---
   const addBlock = (type: BlockType) => {
     const label = type === 'english' ? 'Word (EN)' : type === 'japanese' ? 'Meaning (JP)' : 'Example (EN)';
     const newBlock: PlaybackBlock = { uuid: crypto.randomUUID(), type, label };
@@ -109,36 +160,7 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
     setSettings(prev => ({ ...prev, timeline: _timeline }));
   };
 
-  const speak = useCallback((text: string, lang: 'en-US' | 'ja-JP', rate: number) => {
-    return new Promise<void>((resolve) => {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = lang;
-      utterance.rate = rate;
-
-      if (voicesRef.current.length > 0) {
-        let targetVoice;
-        if (lang === 'en-US') {
-          targetVoice = voicesRef.current.find(v => v.name === 'Google US English') 
-                      || voicesRef.current.find(v => v.name === 'Samantha')
-                      || voicesRef.current.find(v => v.lang === 'en-US');
-        } else {
-          targetVoice = voicesRef.current.find(v => v.lang === 'ja-JP')
-                      || voicesRef.current.find(v => v.name === 'Kyoko')
-                      || voicesRef.current.find(v => v.lang.startsWith('ja'));
-        }
-        if (targetVoice) utterance.voice = targetVoice;
-      }
-      
-      utterance.onend = () => resolve();
-      utterance.onerror = () => resolve();
-      window.speechSynthesis.speak(utterance);
-    });
-  }, []);
-
-  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-  // --- 再生ロジック (個別設定対応版) ---
+  // --- 自動再生ロジック (Repeatループ削除済み) ---
   useEffect(() => {
     let isMounted = true;
 
@@ -161,18 +183,14 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
           case 'english':
             await ensureFlipState(false);
             if (!isMounted || !isPlayingRef.current) return;
-            // ★ Word専用設定を使用
-            for (let i = 0; i < s.word.repeat; i++) {
-               if (!isMounted || !isPlayingRef.current) return;
-               await speak(currentWord.english, 'en-US', s.word.rate);
-               if (i < s.word.repeat - 1) await sleep(300);
-            }
+            // 単語再生 (1回のみ)
+            await speak(currentWord.english, 'en-US', s.word.rate);
             break;
 
           case 'japanese':
             await ensureFlipState(true);
             if (!isMounted || !isPlayingRef.current) return;
-            // 日本語はWordと同じ速度を使用 (リピートは1回固定)
+            // 日本語再生 (1回のみ)
             await speak(currentWord.meaning, 'ja-JP', s.word.rate);
             break;
 
@@ -180,24 +198,21 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
             await ensureFlipState(true);
             if (!isMounted || !isPlayingRef.current) return;
             if (currentWord.examples && currentWord.examples.length > 0) {
-              // ★ Example専用設定を使用
-              for (let i = 0; i < s.example.repeat; i++) {
-                if (!isMounted || !isPlayingRef.current) return;
-                
-                const examplesToPlay = currentWord.examples.slice(0, 2);
-                for (const ex of examplesToPlay) {
-                    if (!isMounted || !isPlayingRef.current) return;
-                    await speak(ex.sentence, 'en-US', s.example.rate);
-                    await sleep(400); 
-                }
-                if (i < s.example.repeat - 1) await sleep(500); 
+              // 例文再生 (最大2つを1回ずつ再生)
+              const examplesToPlay = currentWord.examples.slice(0, 2);
+              for (const ex of examplesToPlay) {
+                  if (!isMounted || !isPlayingRef.current) return;
+                  await speak(ex.sentence, 'en-US', s.example.rate);
+                  await sleep(400); // 例文間の間隔
               }
             }
             break;
         }
+        // ブロック間の待機時間
         await sleep(s.flipInterval * 1000);
       }
 
+      // 次のカードへ
       if (!isMounted || !isPlayingRef.current) return;
       if (currentIndex < words.length - 1) {
         setCurrentIndex(prev => prev + 1);
@@ -219,6 +234,7 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentIndex, isPlaying]);
 
+  // --- Navigation & Key Handlers ---
   const navigateNext = useCallback(() => {
     if (currentIndex < words.length - 1) {
       setCurrentIndex(prev => prev + 1);
@@ -256,7 +272,9 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
         case 'Space': 
           e.preventDefault();
           setIsPlaying(false);
-          isFlipped ? speak(currentWord.meaning, 'ja-JP', settings.word.rate) : speak(currentWord.english, 'en-US', settings.word.rate);
+          isFlipped 
+            ? speak(currentWord.meaning, 'ja-JP', settings.word.rate) 
+            : speak(currentWord.english, 'en-US', settings.word.rate);
           break;
         case 'Escape': onClose(); break;
       }
@@ -281,7 +299,7 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
   const handleManualSpeak = (e: React.MouseEvent, text: string, lang: 'en-US'|'ja-JP') => {
     e.stopPropagation();
     setIsPlaying(false);
-    speak(text, lang, settings.word.rate); // マニュアル再生はデフォルト速度で
+    speak(text, lang, settings.word.rate);
   }
 
   const getBlockColor = (type: BlockType) => {
@@ -310,10 +328,12 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
       <div className="fixed inset-0 z-50 bg-slate-900/90 backdrop-blur-sm flex items-center justify-center p-4">
         <div className="relative w-full max-w-lg aspect-square">
           
+          {/* Close Button */}
           <button onClick={() => { setIsPlaying(false); onClose(); }} className="absolute -top-14 right-0 w-10 h-10 rounded-full bg-white/20 text-white flex items-center justify-center hover:bg-white/40 transition-colors z-50 backdrop-blur-md">
               <i className="fa-solid fa-times"></i>
           </button>
 
+          {/* Top Controls */}
           <div className="absolute -top-16 left-0 flex gap-3 z-50">
              <div className="flex items-center bg-slate-800/80 backdrop-blur-md p-1.5 rounded-2xl border border-white/10 shadow-lg">
                 <button onClick={() => setIsPlaying(!isPlaying)} className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${isPlaying ? 'bg-red-500/80 hover:bg-red-600' : 'bg-indigo-500/80 hover:bg-indigo-600'}`}>
@@ -335,13 +355,14 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
               >
                   <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 border-b border-white/10 pb-2">Custom Playback</h4>
                   
-                  {/* Timeline Buttons & List */}
+                  {/* Timeline Buttons */}
                   <div className="flex gap-2 mb-4">
                       <button onClick={() => addBlock('english')} className="flex-1 py-1.5 bg-indigo-500/20 border border-indigo-500/50 rounded-lg text-xs font-bold text-indigo-300 hover:bg-indigo-500 hover:text-white transition-all">+ Word</button>
                       <button onClick={() => addBlock('japanese')} className="flex-1 py-1.5 bg-slate-500/20 border border-slate-500/50 rounded-lg text-xs font-bold text-slate-300 hover:bg-slate-500 hover:text-white transition-all">+ Meaning</button>
                       <button onClick={() => addBlock('example')} className="flex-1 py-1.5 bg-emerald-500/20 border border-emerald-500/50 rounded-lg text-xs font-bold text-emerald-300 hover:bg-emerald-600 hover:text-white transition-all">+ Ex</button>
                   </div>
 
+                  {/* Timeline List */}
                   <div className="flex-1 overflow-y-auto card-scrollbar min-h-[120px] mb-4 bg-slate-900/50 rounded-xl p-2 border border-white/5">
                     {settings.timeline.length === 0 ? (
                         <div className="h-full flex items-center justify-center text-slate-500 text-xs italic">Tap buttons to add</div>
@@ -370,48 +391,28 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
                     )}
                   </div>
 
-                  {/* Individual Settings */}
+                  {/* Individual Settings (Rate only) */}
                   <div className="space-y-3 pt-2 border-t border-white/10 overflow-y-auto card-scrollbar max-h-[250px] pr-2">
                     
-                    {/* Word Settings (Indigo) */}
+                    {/* Word Settings */}
                     <div className="bg-indigo-500/10 border border-indigo-500/30 p-3 rounded-lg">
                         <p className="text-xs font-bold text-indigo-300 mb-2 uppercase">Word Settings</p>
-                        <div className="mb-3">
+                        <div className="mb-1">
                             <div className="flex justify-between text-[10px] mb-1 text-slate-300">
                                 <span>Speed</span><span className="font-mono text-indigo-200">x{settings.word.rate}</span>
                             </div>
                             <input type="range" min="0.5" max="2.0" step="0.1" value={settings.word.rate} onChange={(e) => setSettings({...settings, word: {...settings.word, rate: parseFloat(e.target.value)}})} className="w-full custom-range" />
                         </div>
-                        <div>
-                            <div className="flex justify-between text-[10px] mb-1 text-slate-300">
-                                <span>Repeat</span><span className="font-mono text-indigo-200">{settings.word.repeat}x</span>
-                            </div>
-                            <div className="flex gap-1">
-                                {[1, 2, 3].map(num => (
-                                    <button key={num} onClick={() => setSettings({...settings, word: {...settings.word, repeat: num}})} className={`flex-1 py-1 text-[10px] rounded border transition-colors ${settings.word.repeat === num ? 'bg-indigo-500 border-indigo-500 text-white' : 'border-white/20 text-slate-400 hover:bg-white/10'}`}>{num}</button>
-                                ))}
-                            </div>
-                        </div>
                     </div>
 
-                    {/* Example Settings (Emerald) */}
+                    {/* Example Settings */}
                     <div className="bg-emerald-500/10 border border-emerald-500/30 p-3 rounded-lg">
                         <p className="text-xs font-bold text-emerald-300 mb-2 uppercase">Example Settings</p>
-                        <div className="mb-3">
+                        <div className="mb-1">
                             <div className="flex justify-between text-[10px] mb-1 text-slate-300">
                                 <span>Speed</span><span className="font-mono text-emerald-200">x{settings.example.rate}</span>
                             </div>
                             <input type="range" min="0.5" max="2.0" step="0.1" value={settings.example.rate} onChange={(e) => setSettings({...settings, example: {...settings.example, rate: parseFloat(e.target.value)}})} className="w-full custom-range" />
-                        </div>
-                        <div>
-                            <div className="flex justify-between text-[10px] mb-1 text-slate-300">
-                                <span>Repeat</span><span className="font-mono text-emerald-200">{settings.example.repeat}x</span>
-                            </div>
-                            <div className="flex gap-1">
-                                {[1, 2, 3].map(num => (
-                                    <button key={num} onClick={() => setSettings({...settings, example: {...settings.example, repeat: num}})} className={`flex-1 py-1 text-[10px] rounded border transition-colors ${settings.example.repeat === num ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-white/20 text-slate-400 hover:bg-white/10'}`}>{num}</button>
-                                ))}
-                            </div>
                         </div>
                     </div>
 
@@ -432,7 +433,7 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
           <div className="w-full h-full cursor-pointer" style={{ perspective: '1000px' }} onClick={handleFlipClick}>
             <div className="relative w-full h-full transition-transform duration-500" style={{ transformStyle: 'preserve-3d', transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)' }}>
               
-              {/* Front */}
+              {/* Front (Word) */}
               <div className="absolute w-full h-full bg-[#f0f4f8] rounded-3xl shadow-2xl flex flex-col items-center justify-center p-8" style={{ backfaceVisibility: 'hidden' }}>
                   <span className="text-indigo-500 font-bold tracking-widest text-sm mb-4 uppercase">{currentWord.category}</span>
                   <h2 className="text-5xl font-black text-slate-800 mb-6 text-center select-none">{currentWord.english}</h2>
@@ -453,7 +454,7 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
                   <p className="absolute bottom-8 text-slate-400 text-sm">Tap or ↑ to flip</p>
               </div>
 
-              {/* Back */}
+              {/* Back (Meaning & Example) */}
               <div className="absolute w-full h-full bg-slate-800 rounded-3xl shadow-2xl flex flex-col p-8 text-white" style={{ backfaceVisibility: 'hidden', transform: 'rotateY(180deg)' }}>
                   <div className="flex flex-col items-center flex-shrink-0 mb-4">
                       <h3 className="text-3xl font-bold mb-4 text-center select-none">{currentWord.meaning}</h3>
@@ -479,6 +480,7 @@ export const FlashcardView: React.FC<FlashcardViewProps> = ({ words, onClose, on
             </div>
           </div>
           
+          {/* Navigation Buttons */}
           <div className="absolute top-1/2 -left-4 sm:-left-16 transform -translate-y-1/2">
               <button onClick={handlePrevClick} disabled={currentIndex === 0} className="w-12 h-12 rounded-full bg-white shadow-lg flex items-center justify-center text-slate-700 disabled:opacity-50 hover:scale-110 transition-all z-40"><i className="fa-solid fa-chevron-left"></i></button>
           </div>
